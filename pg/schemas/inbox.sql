@@ -3,6 +3,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TYPE inbox_event_status AS ENUM (
     'pending',
     'processed',
+    'processing'
     'failed'
 );
 
@@ -37,10 +38,6 @@ CREATE UNIQUE INDEX inbox_events_topic_partition_offset_uidx
 
 CREATE INDEX inbox_events_pending_ready_idx
     ON inbox_events (next_attempt_at, seq)
-    WHERE status = 'pending';
-
-CREATE INDEX inbox_events_pending_reservation_idx
-    ON inbox_events (reserved_until, seq)
     WHERE status = 'pending';
 
 CREATE INDEX inbox_events_key_idx

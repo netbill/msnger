@@ -84,48 +84,76 @@ type CommitOutboxEventParams struct {
 }
 
 type outbox interface {
-	// WriteOutboxEvent writes new event to outbox, fields "event_id", "type", "version", "producer",
-	// take from kafka message headers, "topic", "key", "payload" - from kafka message fields,
-	// also field "next_attempt_at" will be set to current time, and "status" - OutboxEventStatusPending
+	// WriteOutboxEvent writes new event to outbox, fields "event_id", "type", "version", "producer"
+	// are taken from kafka message headers, "topic", "key", "payload" - from kafka message fields.
+	//
+	// This method sets:
+	// - "status"         to OutboxEventStatusPending
+	// - "attempts"       to 0
+	// - "next_attempt_at" to current time
 	WriteOutboxEvent(
 		ctx context.Context,
 		message kafka.Message,
 	) (OutboxEvent, error)
 
-	// WriteAndReserveOutboxEvent writes new event to outbox and reserves it for processing,
-	// does the same thing as WriteOutboxEvent, but set "status" to OutboxEventStatusProcessing and
-	// set "reserved_by" to workerID,
-	// if event its already exists, and its "status" is OutboxEventStatusPending and reserved_by is null,
-	// this method will update "status" to OutboxEventStatusProcessing and set "reserved_by" to workerID and
-	// return this event with reserved = true, otherwise - return existing event with reserved = false
+	// WriteAndReserveOutboxEvent writes new event to outbox and reserves it for processing.
+	// This method is similar to WriteOutboxEvent, but also sets:
+	// - "status"      to OutboxEventStatusProcessing
+	// - "reserved_by" to workerID
+	//
+	// If event already exists and:
+	// - "status"      is OutboxEventStatusPending
+	// - "reserved_by" IS NULL
+	// this method reserves existing event for processing by updating:
+	// - "status"      to OutboxEventStatusProcessing
+	// - "reserved_by" to workerID
+	// and returns reserved = true.
+	//
+	// Otherwise this method does not reserve event and returns reserved = false with existing event.
 	WriteAndReserveOutboxEvent(
 		ctx context.Context,
 		message kafka.Message,
 		workerID string,
-	) (event OutboxEvent, reserved bool, err error)
+	) (OutboxEvent, bool, error)
 
-	// GetOutboxEventByID get event by ID
+	// GetOutboxEventByID retrieves event by ID.
+	// Returns typed error if event not found.
 	GetOutboxEventByID(ctx context.Context, id uuid.UUID) (OutboxEvent, error)
 
-	// ReserveOutboxEvents reserves a batch of events for
-	// with status OutboxEventStatusPending and "next_attempt_at" less than current time,
-	// updates their "status" to OutboxEventStatusProcessing, sets "reserved_by" to workerID
+	// ReserveOutboxEvents reserves events for processing.
+	// This method selects events with:
+	// - "status"          = OutboxEventStatusPending
+	// - "next_attempt_at" <= current time
+	// Orders by "seq" ascending and limits by "limit" parameter.
+	//
+	// This method updates selected events:
+	// - "status"      to OutboxEventStatusProcessing
+	// - "reserved_by" to workerID
 	ReserveOutboxEvents(
 		ctx context.Context,
 		workerID string,
 		limit uint,
 	) ([]OutboxEvent, error)
 
-	// CommitOutboxEvents set field "status" to OutboxEventStatusSent, "sent_at" to SentAt field from map value,
-	// this method updates events with ids from events map, sets "status" to sent, "sent_at" to SentAt field from map value,
-	// and "reserved_by" to null, but only if "reserved_by" is equal to workerID and "status" is OutboxEventStatusProcessing
+	// CommitOutboxEvents marks events as sent.
+	// This method updates events with ids from "events" map and sets:
+	// - "status"          to OutboxEventStatusSent
+	// - "sent_at"         to events[eventID].SentAt
+	// - "last_attempt_at" to events[eventID].SentAt
+	// - clears "reserved_by"
+	//
+	// This method updates only events with:
+	// - "status"      = OutboxEventStatusProcessing
+	// - "reserved_by" = workerID
 	CommitOutboxEvents(
 		ctx context.Context,
 		workerID string,
 		events map[uuid.UUID]CommitOutboxEventParams,
 	) error
 
-	// CommitOutboxEvent marks event as sent this method does the same thing as CommitOutboxEvents, but for one event
+	// CommitOutboxEvent marks event as sent.
+	// This method does the same thing as CommitOutboxEvents, but for one event.
+	// Returns updated event.
 	CommitOutboxEvent(
 		ctx context.Context,
 		eventID uuid.UUID,
@@ -133,17 +161,26 @@ type outbox interface {
 		data CommitOutboxEventParams,
 	) (OutboxEvent, error)
 
-	// DelayOutboxEvents delays events for future processing
-	// this method updates events with ids from events map, sets "status" to OutboxEventStatusPending,
-	// "next_attempt_at" to NextAttemptAt field from map value, "last_error" to Reason field from map value,
-	// "reserved_by" to null, but only if "reserved_by" is equal to workerID and "status" is OutboxEventStatusProcessing
+	// DelayOutboxEvents delays events for future processing.
+	// This method updates events with ids from "events" map and sets:
+	// - "status"          to OutboxEventStatusPending
+	// - increments "attempts" by 1
+	// - sets "last_attempt_at" to current time
+	// - sets "next_attempt_at" to events[eventID].NextAttemptAt
+	// - sets "last_error"      to events[eventID].Reason
+	// - clears "reserved_by"
+	//
+	// This method updates only events with:
+	// - "status"      = OutboxEventStatusProcessing
+	// - "reserved_by" = workerID
 	DelayOutboxEvents(
 		ctx context.Context,
 		workerID string,
 		events map[uuid.UUID]DelayOutboxEventData,
 	) error
 
-	// DelayOutboxEvent delays event processing this method does the same thing as DelayOutboxEvents, but for one event
+	// DelayOutboxEvent delays event processing.
+	// This method does the same thing as DelayOutboxEvents, but for one event.
 	DelayOutboxEvent(
 		ctx context.Context,
 		workerID string,
@@ -151,19 +188,25 @@ type outbox interface {
 		data DelayOutboxEventData,
 	) error
 
-	// CleanProcessingOutboxEvent this method updates events with status OutboxEventStatusProcessing
-	// to OutboxEventStatusPending and set "reserved_by" to null and set "next_attempt_at" to current time
+	// CleanProcessingOutboxEvent cleans events with "status" OutboxEventStatusProcessing.
+	// This method updates events and sets:
+	// - "status"          to OutboxEventStatusPending
+	// - clears "reserved_by"
+	// - sets "next_attempt_at" to current time
 	CleanProcessingOutboxEvent(ctx context.Context) error
 
-	// CleanProcessingOutboxEventForWorker this method similar to CleanProcessingOutboxEvent,
-	// but updates only events with "reserved_by" equal to workerID and set "next_attempt_at" to current time
+	// CleanProcessingOutboxEventForWorker is similar to CleanProcessingOutboxEvent,
+	// but only for events with "reserved_by" equal to workerID.
 	CleanProcessingOutboxEventForWorker(ctx context.Context, workerID string) error
 
-	// CleanFailedOutboxEvent this method updates events with status OutboxEventStatusFailed
-	// to OutboxEventStatusPending and set "reserved_by" to null and set "next_attempt_at" to current time
+	// CleanFailedOutboxEvent cleans events with "status" OutboxEventStatusFailed.
+	// This method updates events and sets:
+	// - "status"          to OutboxEventStatusPending
+	// - clears "reserved_by"
+	// - sets "next_attempt_at" to current time
 	CleanFailedOutboxEvent(ctx context.Context) error
 
-	// CleanFailedOutboxEventForWorker  this method similar to CleanFailedOutboxEvent,
-	// but updates only events with "reserved_by" equal to workerID and set "next_attempt_at" to current time
+	// CleanFailedOutboxEventForWorker is similar to CleanFailedOutboxEvent,
+	// but only for events with "reserved_by" equal to workerID.
 	CleanFailedOutboxEventForWorker(ctx context.Context, workerID string) error
 }

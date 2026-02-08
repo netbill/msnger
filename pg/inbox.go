@@ -78,48 +78,98 @@ func (e *InboxEvent) ToKafkaMessage() kafka.Message {
 }
 
 type inbox interface {
-	// GetInboxEventByID retrieves event by ID
-	GetInboxEventByID(ctx context.Context, id uuid.UUID) (InboxEvent, error)
-
-	// WriteInboxEvent writes new event to inbox
+	// WriteInboxEvent writes new event to inbox, fields "event_id", "type", "version", "producer"
+	// are taken from kafka message headers, "topic", "key", "payload" - from kafka message fields,
+	// "partition", "offset" - from kafka message metadata.
+	//
+	// This method sets:
+	// - "status"        to InboxEventStatusPending
+	// - "attempts"      to 0
+	// - "next_attempt_at" to current time
+	//
+	// Returns typed error if event already exists.
 	WriteInboxEvent(
 		ctx context.Context,
 		message kafka.Message,
 	) (InboxEvent, error)
 
-	// WriteAndReserveInboxEvent writes new event to inbox and reserves it for processing
+	// WriteAndReserveInboxEvent writes new event to inbox and reserves it for processing.
+	// This method is similar to WriteInboxEvent, but also sets:
+	// - "reserved_by" to workerID
+	// - "status"      to InboxEventStatusProcessing
+	//
+	// Reservation is possible only if event does not exist.
+	// Returns typed error if event already exists or reservation is not possible.
 	WriteAndReserveInboxEvent(
 		ctx context.Context,
 		message kafka.Message,
 		workerID string,
-	) (event InboxEvent, reserved bool, err error)
+	) (InboxEvent, error)
 
-	// ReserveInboxEvents reserves event for processing
+	// GetInboxEventByID retrieves event by ID.
+	// Returns typed error if event not found.
+	GetInboxEventByID(ctx context.Context, id uuid.UUID) (InboxEvent, error)
+
+	// ReserveInboxEvents reserves events for processing.
+	// This method selects events with:
+	// - "status"          = InboxEventStatusPending
+	// - "reserved_by"     IS NULL
+	// - "next_attempt_at" <= current time
+	// Orders by "seq" ascending and limits by "limit" parameter.
+	//
+	// This method updates selected events:
+	// - "status"      to InboxEventStatusProcessing
+	// - "reserved_by" to workerID
 	ReserveInboxEvents(
 		ctx context.Context,
 		workerID string,
 		limit uint,
 	) ([]InboxEvent, error)
 
-	// CommitInboxEvent marks event as processed
+	// CommitInboxEvent sets:
+	// - "status"        to InboxEventStatusProcessed
+	// - increments "attempts" by 1
+	// - sets "last_attempt_at" and "processed_at" to current time
+	// - clears "reserved_by"
+	//
+	// This method requires "reserved_by" equals workerID.
 	CommitInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID) error
 
-	// DelayInboxEvent delays event processing
+	// DelayInboxEvent delays event processing, sets:
+	// - increments "attempts" by 1
+	// - sets "last_attempt_at" to current time
+	// - sets "next_attempt_at" to current time + nextAttemptAt
+	// - sets "last_error" to reason
+	// - sets "status" to InboxEventStatusPending
+	// - clears "reserved_by"
+	//
+	// This method requires "reserved_by" equals workerID.
 	DelayInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID, nextAttemptAt time.Duration, reason string) error
 
-	// FailedInboxEvent use if all retry attempts are exhausted
+	// FailedInboxEvent marks event as failed, sets:
+	// - increments "attempts" by 1
+	// - sets "last_attempt_at" to current time
+	// - sets "status" to InboxEventStatusFailed
+	// - sets "last_error" to reason
+	// - sets "processed_at" to current time
+	// - clears "reserved_by"
+	//
+	// This method requires "reserved_by" equals workerID.
 	FailedInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID, reason string) error
 
-	// CleanProcessingInboxEvent use for cleaning inbox events with status processing
+	// CleanProcessingInboxEvent cleans events with "status" InboxEventStatusProcessing.
+	// Intended for use when workers/topic processing is stopped.
 	CleanProcessingInboxEvent(ctx context.Context) error
 
-	// CleanProcessingInboxEventForWorker use cleaning inbox events with status processing for worker
+	// CleanProcessingInboxEventForWorker is similar to CleanProcessingInboxEvent,
+	// but only for events with "reserved_by" equal to workerID.
 	CleanProcessingInboxEventForWorker(ctx context.Context, workerID string) error
 
-	// CleanFailedInboxEvent use for cleaning failed inbox events
+	// CleanFailedInboxEvent cleans events with "status" InboxEventStatusFailed.
 	CleanFailedInboxEvent(ctx context.Context) error
 
-	// CleanFailedInboxEventForWorker use cleaning inbox events with status failed for this worker
+	// CleanFailedInboxEventForWorker is similar to CleanFailedInboxEvent,
+	// but only for events with "reserved_by" equal to workerID.
 	CleanFailedInboxEventForWorker(ctx context.Context, workerID string) error
 
 	Transaction(ctx context.Context, fn func(ctx context.Context) error) error
