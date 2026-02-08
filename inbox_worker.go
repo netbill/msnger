@@ -4,9 +4,9 @@ import (
 	"context"
 )
 
-type Inbox interface {
+type InboxWorker interface {
 	Run(ctx context.Context)
-	Stop() error
+	Shutdown(ctx context.Context) error
 
 	Route(eventType string, handler InHandlerFunc)
 }

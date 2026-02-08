@@ -10,7 +10,7 @@ type InHandlerFunc func(ctx context.Context, msg kafka.Message) error
 
 type Consumer interface {
 	Run(ctx context.Context)
-	Stop() error
+	Shutdown(ctx context.Context) error
 
 	Route(eventType string, handler InHandlerFunc)
 }

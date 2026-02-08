@@ -2,31 +2,26 @@ package pg
 
 import (
 	"context"
-	"fmt"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/segmentio/kafka-go"
-
-	"github.com/netbill/logium"
-	"github.com/netbill/msnger"
 	"github.com/netbill/msnger/headers"
+	"github.com/segmentio/kafka-go"
 )
 
 const (
-	// InboxMsgStatusPending indicates that the event is pending processing
-	InboxMsgStatusPending = "pending"
-	// InboxMsgStatusProcessing indicates this is event already processing by some worker
-	InboxMsgStatusProcessing = "processing"
-	// InboxMsgStatusProcessed indicates that the event has been successfully processed
-	InboxMsgStatusProcessed = "processed"
-	// InboxMsgStatusFailed indicates that all retry attempts have been exhausted
-	InboxMsgStatusFailed = "failed"
+	// InboxEventStatusPending indicates that the event is pending processing
+	InboxEventStatusPending = "pending"
+	// InboxEventStatusProcessing indicates this is event already processing by some worker
+	InboxEventStatusProcessing = "processing"
+	// InboxEventStatusProcessed indicates that the event has been successfully processed
+	InboxEventStatusProcessed = "processed"
+	// InboxEventStatusFailed indicates that all retry attempts have been exhausted
+	InboxEventStatusFailed = "failed"
 )
 
-type InboxMsg struct {
+type InboxEvent struct {
 	EventID uuid.UUID `json:"event_id"`
 	Seq     uint      `json:"seq"`
 
@@ -52,7 +47,7 @@ type InboxMsg struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
-func (e *InboxMsg) ToKafkaMessage() kafka.Message {
+func (e *InboxEvent) ToKafkaMessage() kafka.Message {
 	return kafka.Message{
 		Topic: e.Topic,
 		Key:   []byte(e.Key),
@@ -82,229 +77,50 @@ func (e *InboxMsg) ToKafkaMessage() kafka.Message {
 	}
 }
 
-type WorkerConfig struct {
-	maxRutin uint
-	minSleep time.Duration
-	maxSleep time.Duration
+type inbox interface {
+	// GetInboxEventByID retrieves event by ID
+	GetInboxEventByID(ctx context.Context, id uuid.UUID) (InboxEvent, error)
 
-	minButchSize uint
-	maxButchSize uint
-}
+	// WriteInboxEvent writes new event to inbox
+	WriteInboxEvent(
+		ctx context.Context,
+		message kafka.Message,
+	) (InboxEvent, error)
 
-type inboxWorWorker interface {
-}
+	// WriteAndReserveInboxEvent writes new event to inbox and reserves it for processing
+	WriteAndReserveInboxEvent(
+		ctx context.Context,
+		message kafka.Message,
+		workerID string,
+	) (event InboxEvent, reserved bool, err error)
 
-type Inbox struct {
-	id     string
-	log    *logium.Logger
-	config WorkerConfig
+	// ReserveInboxEvents reserves event for processing
+	ReserveInboxEvents(
+		ctx context.Context,
+		workerID string,
+		limit uint,
+	) ([]InboxEvent, error)
 
-	box      inboxWorWorker
-	handlers map[string]msnger.InHandlerFunc
-}
+	// CommitInboxEvent marks event as processed
+	CommitInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID) error
 
-func (i *Inbox) Run(ctx context.Context) {
+	// DelayInboxEvent delays event processing
+	DelayInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID, nextAttemptAt time.Duration, reason string) error
 
-}
+	// FailedInboxEvent use if all retry attempts are exhausted
+	FailedInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID, reason string) error
 
-func (i *Inbox) Stop() error {
+	// CleanProcessingInboxEvent use for cleaning inbox events with status processing
+	CleanProcessingInboxEvent(ctx context.Context) error
 
-	return nil
-}
+	// CleanProcessingInboxEventForWorker use cleaning inbox events with status processing for worker
+	CleanProcessingInboxEventForWorker(ctx context.Context, workerID string) error
 
-func (i *Inbox) Route(eventType string, handler msnger.InHandlerFunc) {
-	_, ok := i.handlers[eventType]
-	if ok {
-		panic(fmt.Errorf("for one type event double define handler"))
-	}
+	// CleanFailedInboxEvent use for cleaning failed inbox events
+	CleanFailedInboxEvent(ctx context.Context) error
 
-	i.handlers[eventType] = handler
-}
+	// CleanFailedInboxEventForWorker use cleaning inbox events with status failed for this worker
+	CleanFailedInboxEventForWorker(ctx context.Context, workerID string) error
 
-func (i *Inbox) onUnknown(ctx context.Context, m kafka.Message) error {
-	i.log.Warnf(
-		"onUnknown called for event on topic %s, partition %d, offset %d", m.Topic, m.Partition, m.Offset,
-	)
-
-	return nil
-}
-
-func (i *Inbox) invalidContent(ctx context.Context, m kafka.Message) error {
-	i.log.Warnf(
-		"invalid content in message on topic %s, partition %d, offset %d", m.Topic, m.Partition, m.Offset,
-	)
-
-	return nil
-}
-
-func (w *Worker) Run(ctx context.Context) {
-	defer func() {
-		err := w.box.CleanProcessingInboxEventForWorker(context.Background(), w.id)
-		if err != nil {
-			w.log.WithError(err).Error("Failed to clean processing inbox")
-		}
-	}()
-
-	butchSize := w.config.maxButchSize
-	sleep := w.config.minSleep
-
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-
-		numEvents := w.tick(ctx, butchSize)
-
-		butchSize, sleep = w.calculateButchAndSleep(numEvents, sleep)
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(sleep):
-		}
-	}
-}
-
-func (w *Worker) tick(ctx context.Context, butchSize uint) uint {
-	events, err := w.box.ReserveInboxEvents(ctx, w.id, butchSize)
-	if err != nil {
-		w.log.WithError(err).Error("failed to reserve inbox events")
-		return 0
-	}
-	if len(events) == 0 {
-		return 0
-	}
-
-	maxParallel := int(w.config.maxRutin)
-	if maxParallel <= 0 {
-		maxParallel = 1
-	}
-
-	sem := make(chan struct{}, maxParallel)
-	errCh := make(chan error, len(events))
-
-	var wg sync.WaitGroup
-
-	for _, ev := range events {
-		ev := ev
-
-		sem <- struct{}{}
-		wg.Add(1)
-
-		go func() {
-			defer func() {
-				wg.Done()
-				<-sem
-			}()
-
-			if ctx.Err() != nil {
-				return
-			}
-
-			txErr := w.box.Transaction(ctx, func(ctx context.Context) error {
-				handler, ok := w.handlers[ev.Type]
-				if !ok {
-					return w.Unknown(ctx, ev)
-				}
-
-				res := handler(ctx, ev)
-				if res != nil {
-					w.log.WithError(res).Errorf("handler for event %s type=%s failed", ev.EventID, ev.Type)
-					return w.box.DelayInboxEvent(ctx, w.id, ev.EventID, w.nextAttemptAt(ev), res.Error())
-				}
-
-				w.log.Debugf("event %s type=%s processed successfully", ev.EventID, ev.Type)
-				return w.box.CommitInboxEvent(ctx, w.id, ev.EventID)
-			})
-
-			if txErr != nil {
-				errCh <- txErr
-			}
-		}()
-	}
-
-	wg.Wait()
-
-	close(errCh)
-
-	for e := range errCh {
-		w.log.WithError(e).Error("failed to process inbox event")
-	}
-
-	return uint(len(events))
-}
-
-func (w *Worker) nextAttemptAt(ev Event) time.Duration {
-	res := time.Second * time.Duration(30*ev.Attempts)
-	if res < time.Minute {
-		return time.Minute
-	}
-	if res > time.Minute*10 {
-		return time.Minute * 10
-	}
-
-	return res
-}
-
-func (w *Worker) calculateButchAndSleep(
-	numEvents uint,
-	lastSleep time.Duration,
-) (uint, time.Duration) {
-	if numEvents >= w.config.maxButchSize {
-		return w.config.maxButchSize, w.config.minSleep
-	}
-
-	var sleep time.Duration
-	if numEvents == 0 {
-		if lastSleep <= 0 {
-			sleep = w.config.minSleep
-		} else {
-			sleep = lastSleep * 2
-			if sleep < w.config.minSleep {
-				sleep = w.config.minSleep
-			}
-		}
-		if sleep > w.config.maxSleep {
-			sleep = w.config.maxSleep
-		}
-		if sleep < 0 {
-			sleep = 0
-		}
-
-		return w.config.minButchSize, sleep
-	}
-
-	butchSize := numEvents * 2
-	if butchSize < w.config.minButchSize {
-		butchSize = w.config.minButchSize
-	}
-	if butchSize > w.config.maxButchSize {
-		butchSize = w.config.maxButchSize
-	}
-
-	fill := float64(numEvents) / float64(w.config.maxButchSize)
-
-	switch {
-	case fill >= 0.75:
-		sleep = 0
-	case fill >= 0.50:
-		sleep = w.config.minSleep
-	case fill >= 0.25:
-		sleep = w.config.minSleep * 2
-	default:
-		sleep = w.config.minSleep * 4
-		if sleep < lastSleep {
-			sleep = lastSleep
-		}
-	}
-
-	return butchSize, sleep
-}
-
-func (w *Inbox) CleanOwnFailedEvents(ctx context.Context) error {
-	return w.box.CleanFailedInboxEventForWorker(ctx, w.id)
-}
-
-func (w *Inbox) CleanOwnProcessingEvents(ctx context.Context) error {
-	return w.box.CleanProcessingInboxEventForWorker(ctx, w.id)
+	Transaction(ctx context.Context, fn func(ctx context.Context) error) error
 }

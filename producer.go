@@ -2,17 +2,18 @@ package msnger
 
 import (
 	"context"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 )
 
 type Producer interface {
-	WriteMessage(ctx context.Context, msg kafka.Message)
+	Publish(ctx context.Context, msg kafka.Message) error
 
-	WriteMessageInBox(ctx context.Context, msg kafka.Message, delay *time.Duration)
-	CommitMessageInBox(ctx context.Context, messageID uuid.UUID)
+	WriteToOutbox(ctx context.Context, msg kafka.Message) (uuid.UUID, error)
+	WriteToOutboxAndReserve(ctx context.Context, msg kafka.Message) (uuid.UUID, error)
 
-	ShutDown() error
+	SendFromOutbox(ctx context.Context, messageID uuid.UUID) error
+
+	Shutdown(ctx context.Context) error
 }

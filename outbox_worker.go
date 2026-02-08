@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-type Outbox interface {
+type OutboxWorker interface {
 	Run(ctx context.Context)
-	Stop() error
+	Shutdown(ctx context.Context) error
 }

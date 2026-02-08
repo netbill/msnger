@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 
 	"github.com/netbill/logium"
@@ -15,7 +14,7 @@ import (
 
 type Consumer struct {
 	log        *logium.Logger
-	inbox      inboxForConsumer
+	inbox      inbox
 	subscriber subscriber
 
 	id     string
@@ -28,28 +27,10 @@ type subscriber interface {
 	Header(m kafka.Message, key string) (string, bool)
 }
 
-type inboxForConsumer interface {
-	WriteAndReserveInboxEvent(
-		ctx context.Context,
-		message kafka.Message,
-		workerID string,
-	) (event InboxMsg, reserved bool, err error)
-
-	CommitInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID) error
-
-	DelayInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID, nextAttemptAt time.Duration, reason string) error
-
-	CleanProcessingInboxEventForWorker(ctx context.Context, workerID string) error
-
-	CleanFailedInboxEventForWorker(ctx context.Context, workerID string) error
-
-	Transaction(ctx context.Context, fn func(ctx context.Context) error) error
-}
-
 func (c *Consumer) Route(eventType string, handler msnger.InHandlerFunc) {
 	_, ok := c.routes[eventType]
 	if ok {
-		panic(fmt.Errorf("for one type event double define handler"))
+		panic(fmt.Errorf("for one type event double define handler in consumer %s", c.id))
 	}
 
 	c.routes[eventType] = func(ctx context.Context, m kafka.Message) error {
@@ -104,19 +85,6 @@ func (c *Consumer) invalidContent(ctx context.Context, m kafka.Message) error {
 	return nil
 }
 
-func (c *Consumer) route(m kafka.Message) msnger.InHandlerFunc {
-	et, ok := c.subscriber.Header(m, headers.EventType)
-	if !ok {
-		return c.invalidContent
-	}
-
-	if h, ok := c.routes[et]; ok {
-		return h
-	}
-
-	return c.onUnknown
-}
-
 func (c *Consumer) Run(ctx context.Context) {
 	backoff := 200 * time.Millisecond
 	const maxBackoff = 5 * time.Second
@@ -142,6 +110,19 @@ func (c *Consumer) Run(ctx context.Context) {
 	}
 }
 
+func (c *Consumer) route(m kafka.Message) msnger.InHandlerFunc {
+	et, ok := c.subscriber.Header(m, headers.EventType)
+	if !ok {
+		return c.invalidContent
+	}
+
+	if h, ok := c.routes[et]; ok {
+		return h
+	}
+
+	return c.onUnknown
+}
+
 func (c *Consumer) CleanOwnFailedEvents(ctx context.Context) error {
 	return c.inbox.CleanFailedInboxEventForWorker(ctx, c.id)
 }
@@ -150,11 +131,11 @@ func (c *Consumer) CleanOwnProcessingEvents(ctx context.Context) error {
 	return c.inbox.CleanProcessingInboxEventForWorker(ctx, c.id)
 }
 
-func (c *Consumer) Stop() error {
-	err := c.CleanOwnProcessingEvents(context.Background())
+func (c *Consumer) Shutdown(ctx context.Context) error {
+	err := c.CleanOwnProcessingEvents(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to clean processing events: %w", err)
+		c.log.WithError(err).Error("Failed to clean processing events for consumer %s", c.id)
 	}
 
-	return nil
+	return err
 }
