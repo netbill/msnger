@@ -5,6 +5,6 @@ import (
 )
 
 type OutboxWorker interface {
-	Run(ctx context.Context)
+	Run(ctx context.Context, id string)
 	Shutdown(ctx context.Context) error
 }

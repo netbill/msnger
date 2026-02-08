@@ -11,28 +11,55 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+// OutboxWorkerConfig defines configuration for OutboxWorker.
 type OutboxWorkerConfig struct {
-	maxRutin uint
+	// MaxRutin defines maximum number of parallel routines for sending events.
+	// If 0, it will be set to 1.
+	MaxRutin uint
 
-	minSleep time.Duration
-	maxSleep time.Duration
+	// MinSleep defines minimum sleep time between ticks. It will be used when there are no events to send.
+	MinSleep time.Duration
+	// MaxSleep defines maximum sleep time between ticks. It will be used when there are no events to send for a long time.
+	MaxSleep time.Duration
 
-	minButchSize uint
-	maxButchSize uint
+	// MinButchSize defines minimum number of events to reserve for sending in one tick.
+	MinButchSize uint
+	// MaxButchSize defines maximum number of events to reserve for sending in one tick.
+	MaxButchSize uint
 }
 
 type OutboxWorker struct {
 	log    *logium.Logger
 	config OutboxWorkerConfig
-	box    outbox
+
+	//box realization of outbox
+	box outbox
 
 	writer *kafka.Writer
 }
 
+func NewOutboxWorker(
+	log *logium.Logger,
+	cfg OutboxWorkerConfig,
+	box outbox,
+	writer *kafka.Writer,
+) *OutboxWorker {
+	w := &OutboxWorker{
+		log:    log,
+		config: cfg,
+		box:    box,
+		writer: writer,
+	}
+
+	return w
+}
+
+// outboxWorkerJob defines job for sending outbox event to kafka.
 type outboxWorkerJob struct {
 	ev OutboxEvent
 }
 
+// outboxWorkerRes defines result of sending outbox event to kafka.
 type outboxWorkerRes struct {
 	id     uuid.UUID
 	now    time.Time
@@ -40,6 +67,13 @@ type outboxWorkerRes struct {
 	reason string
 }
 
+// Run starts the worker loop. It will run until the context is cancelled.
+// also here transferring the ID, so the worker can clean up only its own events in case of shutdown or restart.
+// Below is an explanation of how it works.
+// So first we create a channel for jobs and results,
+// after that for each routine (up to MaxRutin) we start a goroutine that listens channel eith jobs,
+// and for each job tru to send event to kafka, and then send result to results channel.
+// so after that send the result of success or failure to the results channel
 func (w *OutboxWorker) Run(ctx context.Context, id string) {
 	defer func() {
 		if err := w.CleanOwnProcessingEvents(context.Background(), id); err != nil {
@@ -47,10 +81,10 @@ func (w *OutboxWorker) Run(ctx context.Context, id string) {
 		}
 	}()
 
-	butchSize := w.config.minButchSize
-	sleep := w.config.minSleep
+	butchSize := w.config.MinButchSize
+	sleep := w.config.MinSleep
 
-	maxParallel := int(w.config.maxRutin)
+	maxParallel := int(w.config.MaxRutin)
 	if maxParallel <= 0 {
 		maxParallel = 1
 	}
@@ -62,34 +96,7 @@ func (w *OutboxWorker) Run(ctx context.Context, id string) {
 	wg.Add(maxParallel)
 
 	for i := 0; i < maxParallel; i++ {
-		go func() {
-			defer wg.Done()
-
-			for job := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-
-				ev := job.ev
-				msg := ev.ToKafkaMessage()
-				sendErr := w.writer.WriteMessages(ctx, msg)
-				now := time.Now().UTC()
-
-				if sendErr != nil {
-					w.log.WithError(sendErr).Errorf("failed to send event id=%s", ev.EventID)
-					results <- outboxWorkerRes{
-						id:     ev.EventID,
-						now:    now,
-						err:    sendErr,
-						reason: sendErr.Error(),
-					}
-					continue
-				}
-
-				w.log.Debugf("sent event id=%s", ev.EventID)
-				results <- outboxWorkerRes{id: ev.EventID, now: now}
-			}
-		}()
+		go w.jober(ctx, &wg, jobs, results)
 	}
 
 	defer func() {
@@ -113,6 +120,40 @@ func (w *OutboxWorker) Run(ctx context.Context, id string) {
 			return
 		case <-time.After(sleep):
 		}
+	}
+}
+
+func (w *OutboxWorker) jober(
+	ctx context.Context,
+	wg *sync.WaitGroup,
+	jobs <-chan outboxWorkerJob,
+	results chan<- outboxWorkerRes,
+) {
+	defer wg.Done()
+
+	for job := range jobs {
+		if ctx.Err() != nil {
+			return
+		}
+
+		ev := job.ev
+		msg := ev.ToKafkaMessage()
+		sendErr := w.writer.WriteMessages(ctx, msg)
+		now := time.Now().UTC()
+
+		if sendErr != nil {
+			w.log.WithError(sendErr).Errorf("failed to send event id=%s", ev.EventID)
+			results <- outboxWorkerRes{
+				id:     ev.EventID,
+				now:    now,
+				err:    sendErr,
+				reason: sendErr.Error(),
+			}
+			continue
+		}
+
+		w.log.Debugf("sent event id=%s", ev.EventID)
+		results <- outboxWorkerRes{id: ev.EventID, now: now}
 	}
 }
 
@@ -141,7 +182,7 @@ func (w *OutboxWorker) tick(
 	}
 
 	commit := make(map[uuid.UUID]CommitOutboxEventParams, len(events))
-	pending := make(map[uuid.UUID]DelayedOutboxEventData, len(events))
+	pending := make(map[uuid.UUID]DelayOutboxEventData, len(events))
 
 	for i := 0; i < len(events); i++ {
 		select {
@@ -149,7 +190,7 @@ func (w *OutboxWorker) tick(
 			return uint(len(events))
 		case r := <-results:
 			if r.err != nil {
-				pending[r.id] = DelayedOutboxEventData{
+				pending[r.id] = DelayOutboxEventData{
 					NextAttemptAt: r.now.Add(5 * time.Minute),
 					Reason:        r.reason,
 				}
@@ -177,8 +218,8 @@ func (w *OutboxWorker) tick(
 func (w *OutboxWorker) calculateBatch(
 	numEvents uint,
 ) uint {
-	minBatch := w.config.minButchSize
-	maxBatch := w.config.maxButchSize
+	minBatch := w.config.MinButchSize
+	maxBatch := w.config.MaxButchSize
 	if maxBatch == 0 {
 		maxBatch = 100
 	}
@@ -207,8 +248,8 @@ func (w *OutboxWorker) calculateSleep(
 	numEvents uint,
 	lastSleep time.Duration,
 ) time.Duration {
-	minSleep := w.config.minSleep
-	maxSleep := w.config.maxSleep
+	minSleep := w.config.MinSleep
+	maxSleep := w.config.MaxSleep
 
 	var sleep time.Duration
 
@@ -220,11 +261,11 @@ func (w *OutboxWorker) calculateSleep(
 			sleep = lastSleep * 2
 		}
 
-	case numEvents >= w.config.maxButchSize:
+	case numEvents >= w.config.MaxButchSize:
 		sleep = 0
 
 	default:
-		fill := float64(numEvents) / float64(w.config.maxButchSize)
+		fill := float64(numEvents) / float64(w.config.MaxButchSize)
 
 		switch {
 		case fill >= 0.75:
@@ -248,11 +289,17 @@ func (w *OutboxWorker) calculateSleep(
 	return sleep
 }
 
-func (w *OutboxWorker) CleanOwnFailedEvents(ctx context.Context, id string) error {
+func (w *OutboxWorker) CleanOwnFailedEvents(
+	ctx context.Context,
+	id string,
+) error {
 	return w.box.CleanFailedOutboxEventForWorker(ctx, id)
 }
 
-func (w *OutboxWorker) CleanOwnProcessingEvents(ctx context.Context, id string) error {
+func (w *OutboxWorker) CleanOwnProcessingEvents(
+	ctx context.Context,
+	id string,
+) error {
 	return w.box.CleanProcessingOutboxEventForWorker(ctx, id)
 }
 

@@ -74,7 +74,7 @@ func (e *OutboxEvent) ToKafkaMessage() kafka.Message {
 	}
 }
 
-type DelayedOutboxEventData struct {
+type DelayOutboxEventData struct {
 	NextAttemptAt time.Time // this data for field "next_attempt_at" in outbox_events table
 	Reason        string    // this data for field "last_error" in outbox_events table
 }
@@ -103,6 +103,9 @@ type outbox interface {
 		message kafka.Message,
 		workerID string,
 	) (event OutboxEvent, reserved bool, err error)
+
+	// GetOutboxEventByID get event by ID
+	GetOutboxEventByID(ctx context.Context, id uuid.UUID) (OutboxEvent, error)
 
 	// ReserveOutboxEvents reserves a batch of events for
 	// with status OutboxEventStatusPending and "next_attempt_at" less than current time,
@@ -137,15 +140,15 @@ type outbox interface {
 	DelayOutboxEvents(
 		ctx context.Context,
 		workerID string,
-		events map[uuid.UUID]DelayedOutboxEventData,
+		events map[uuid.UUID]DelayOutboxEventData,
 	) error
 
-	// DelayedOutboxEvent delays event processing this method does the same thing as DelayOutboxEvents, but for one event
-	DelayedOutboxEvent(
+	// DelayOutboxEvent delays event processing this method does the same thing as DelayOutboxEvents, but for one event
+	DelayOutboxEvent(
 		ctx context.Context,
 		workerID string,
 		eventID uuid.UUID,
-		data DelayedOutboxEventData,
+		data DelayOutboxEventData,
 	) error
 
 	// CleanProcessingOutboxEvent this method updates events with status OutboxEventStatusProcessing
