@@ -23,26 +23,26 @@ const (
 
 type InboxEvent struct {
 	EventID uuid.UUID `json:"event_id"`
-	Seq     uint      `json:"seq"`
+	Seq     int       `json:"seq"`
 
 	Topic     string `json:"topic"`
 	Key       string `json:"key"`
 	Type      string `json:"type"`
-	Version   uint   `json:"version"`
+	Version   int    `json:"version"`
 	Producer  string `json:"producer"`
 	Payload   []byte `json:"payload"`
-	Partition uint   `json:"partition"`
-	Offset    uint   `json:"offset"`
+	Partition int    `json:"partition"`
+	Offset    int    `json:"offset"`
 
 	ReservedBy *string `json:"reserved_by"`
 
 	Status        string     `json:"status"`
-	Attempts      uint       `json:"attempts"`
+	Attempts      int        `json:"attempts"`
 	NextAttemptAt time.Time  `json:"next_attempt_at"`
 	LastAttemptAt *time.Time `json:"last_attempt_at"`
 	LastError     *string    `json:"last_error"`
 
-	ProcessedAt *time.Time `json:"processed_at"`
+	ProcessedAt *time.Time `json:"processedAt"`
 	ProducedAt  time.Time  `json:"produced_at"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
@@ -63,7 +63,7 @@ func (e *InboxEvent) ToKafkaMessage() kafka.Message {
 			},
 			{
 				Key:   headers.EventVersion,
-				Value: []byte(strconv.FormatUint(uint64(e.Version), 10)),
+				Value: []byte(strconv.FormatInt(int64(e.Version), 10)),
 			},
 			{
 				Key:   headers.Producer,
@@ -123,39 +123,54 @@ type inbox interface {
 	ReserveInboxEvents(
 		ctx context.Context,
 		workerID string,
-		limit uint,
+		limit int,
 	) ([]InboxEvent, error)
 
 	// CommitInboxEvent sets:
 	// - "status"        to InboxEventStatusProcessed
 	// - increments "attempts" by 1
-	// - sets "last_attempt_at" and "processed_at" to current time
+	// - sets "last_attempt_at" and "processedAt" to current time
 	// - clears "reserved_by"
 	//
 	// This method requires "reserved_by" equals workerID.
-	CommitInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID) error
+	CommitInboxEvent(
+		ctx context.Context,
+		workerID string,
+		eventID uuid.UUID,
+	) (InboxEvent, error)
 
 	// DelayInboxEvent delays event processing, sets:
 	// - increments "attempts" by 1
 	// - sets "last_attempt_at" to current time
-	// - sets "next_attempt_at" to current time + nextAttemptAt
+	// - sets "next_attempt_at" to nextAttemptAt
 	// - sets "last_error" to reason
 	// - sets "status" to InboxEventStatusPending
 	// - clears "reserved_by"
 	//
 	// This method requires "reserved_by" equals workerID.
-	DelayInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID, nextAttemptAt time.Duration, reason string) error
+	DelayInboxEvent(
+		ctx context.Context,
+		workerID string,
+		eventID uuid.UUID,
+		nextAttemptAt time.Time,
+		reason string,
+	) (InboxEvent, error)
 
 	// FailedInboxEvent marks event as failed, sets:
 	// - increments "attempts" by 1
 	// - sets "last_attempt_at" to current time
 	// - sets "status" to InboxEventStatusFailed
 	// - sets "last_error" to reason
-	// - sets "processed_at" to current time
+	// - sets "processedAt" to current time
 	// - clears "reserved_by"
 	//
 	// This method requires "reserved_by" equals workerID.
-	FailedInboxEvent(ctx context.Context, workerID string, eventID uuid.UUID, reason string) error
+	FailedInboxEvent(
+		ctx context.Context,
+		workerID string,
+		eventID uuid.UUID,
+		reason string,
+	) (InboxEvent, error)
 
 	// CleanProcessingInboxEvent cleans events with "status" InboxEventStatusProcessing.
 	// Intended for use when workers/topic processing is stopped.

@@ -23,19 +23,19 @@ const (
 
 type OutboxEvent struct {
 	EventID uuid.UUID `json:"event_id"`
-	Seq     uint      `json:"seq"`
+	Seq     int       `json:"seq"`
 
 	Topic    string `json:"topic"`
 	Key      string `json:"key"`
 	Type     string `json:"type"`
-	Version  uint   `json:"version"`
+	Version  int    `json:"version"`
 	Producer string `json:"producer"`
 	Payload  []byte `json:"payload"`
 
 	ReservedBy *string `json:"reserved_by"`
 
 	Status        string     `json:"status"`
-	Attempts      uint       `json:"attempts"`
+	Attempts      int        `json:"attempts"`
 	NextAttemptAt time.Time  `json:"next_attempt_at"`
 	LastAttemptAt *time.Time `json:"last_attempt_at"`
 	LastError     *string    `json:"last_error"`
@@ -60,7 +60,7 @@ func (e *OutboxEvent) ToKafkaMessage() kafka.Message {
 			},
 			{
 				Key:   headers.EventVersion,
-				Value: []byte(strconv.FormatUint(uint64(e.Version), 10)),
+				Value: []byte(strconv.FormatInt(int64(e.Version), 10)),
 			},
 			{
 				Key:   headers.Producer,
@@ -132,7 +132,7 @@ type outbox interface {
 	ReserveOutboxEvents(
 		ctx context.Context,
 		workerID string,
-		limit uint,
+		limit int,
 	) ([]OutboxEvent, error)
 
 	// CommitOutboxEvents marks events as sent.

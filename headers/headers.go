@@ -45,7 +45,7 @@ func RequiredHeaderValue(hs []kafka.Header, key string) ([]byte, error) {
 type MessageRequiredHeaders struct {
 	EventID      uuid.UUID
 	EventType    string
-	EventVersion uint
+	EventVersion int
 	Producer     string
 	ContentType  string
 }
@@ -73,11 +73,11 @@ func ParseMessageRequiredHeaders(hs []kafka.Header) (MessageRequiredHeaders, err
 	if err != nil {
 		return out, err
 	}
-	v64, err := strconv.ParseUint(string(eventVersionBytes), 10, 32)
+	v64, err := strconv.ParseInt(string(eventVersionBytes), 10, 32)
 	if err != nil {
 		return MessageRequiredHeaders{}, fmt.Errorf("invalid %s header", EventVersion)
 	}
-	out.EventVersion = uint(v64)
+	out.EventVersion = int(v64)
 
 	producerBytes, err := RequiredHeaderValue(hs, Producer)
 	if err != nil {

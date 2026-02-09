@@ -80,7 +80,7 @@ func (p *producer) WriteToOutboxAndReserve(
 
 // TrySendFromOutbox sends message from outbox to kafka topic, this method should be used for processing events from outbox,
 // assumed this method should because after WriteToOutboxAndReserve,
-// and not in transaction with WriteToOutboxAndReserve and handle function
+// and not in transaction with WriteToOutboxAndReserve and handleEvent function
 // because this method will try to reserve event for sending, and if reservation is successful, it will send message to kafka topic,
 // so if send event to kafka topic is successful, it will commit event in outbox,
 // otherwise it will delay event for future processing, and if reservation is not successful,

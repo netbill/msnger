@@ -52,7 +52,7 @@ func (c *Consumer) Route(eventType string, handler msnger.InHandlerFunc) {
 
 			res := handler(ctx, event.ToKafkaMessage())
 			if res != nil {
-				c.log.WithError(res).Error("failed to handle event")
+				c.log.WithError(res).Error("failed to handleEvent event")
 				return c.inbox.DelayInboxEvent(ctx, c.id, event.EventID, time.Minute, res.Error())
 			}
 

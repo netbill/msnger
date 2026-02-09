@@ -11,22 +11,45 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+const (
+	DefaultOutboxWorkerMaxRutin = 10
+
+	DefaultOutboxWorkerMinSleep = 100 * time.Millisecond
+	DefaultOutboxWorkerMaxSleep = 5 * time.Second
+
+	DefaultOutboxWorkerMinBatchSize = 10
+	DefaultOutboxWorkerMaxBatchSize = 100
+
+	DefaultOutboxWorkerMinNextAttempt = time.Minute
+	DefaultOutboxWorkerMaxNextAttempt = 10 * time.Minute
+)
+
 // OutboxWorkerConfig configures OutboxWorker behavior.
 type OutboxWorkerConfig struct {
 	// MaxRutin is the maximum number of parallel send loops.
-	// If 0, it defaults to 1.
-	MaxRutin uint
+	// If 0, it defaults to DefaultOutboxWorkerMaxRutin.
+	MaxRutin int
 
 	// MinSleep is the minimum delay between iterations when there are few/no events.
+	// If 0, it defaults to DefaultOutboxWorkerMinSleep.
 	MinSleep time.Duration
 	// MaxSleep is the maximum delay between iterations during long idle periods.
+	// If 0, it defaults to DefaultOutboxWorkerMaxSleep.
 	MaxSleep time.Duration
 
-	// MinButchSize is the minimum number of events reserved per batch.
-	MinButchSize uint
-	// MaxButchSize is the maximum number of events reserved per batch.
-	// If 0, it defaults to 100.
-	MaxButchSize uint
+	// MinBatchSize is the minimum number of events reserved per batch.
+	// If 0, it defaults to DefaultOutboxWorkerMinBatchSize.
+	MinBatchSize int
+	// MaxBatchSize is the maximum number of events reserved per batch.
+	// If 0, it defaults to DefaultOutboxWorkerMaxBatchSize.
+	MaxBatchSize int
+
+	// MinNextAttempt is the minimum delay before next attempt to process failed event.
+	// If 0, it defaults to DefaultOutboxWorkerMinNextAttempt.
+	MinNextAttempt time.Duration
+	// MaxNextAttempt is the maximum delay before next attempt to process failed event.
+	// If 0, it defaults to DefaultOutboxWorkerMaxNextAttempt.
+	MaxNextAttempt time.Duration
 }
 
 // OutboxWorker reads pending events from outbox storage and publishes them to Kafka.
@@ -49,6 +72,28 @@ func NewOutboxWorker(
 	box outbox,
 	writer *kafka.Writer,
 ) *OutboxWorker {
+	if cfg.MaxRutin < 0 {
+		cfg.MaxRutin = DefaultOutboxWorkerMaxRutin
+	}
+	if cfg.MinSleep <= 0 {
+		cfg.MinSleep = DefaultOutboxWorkerMinSleep
+	}
+	if cfg.MaxSleep <= 0 {
+		cfg.MaxSleep = DefaultOutboxWorkerMaxSleep
+	}
+	if cfg.MinBatchSize <= 0 {
+		cfg.MinBatchSize = DefaultOutboxWorkerMinBatchSize
+	}
+	if cfg.MaxBatchSize < cfg.MinBatchSize {
+		cfg.MaxBatchSize = DefaultOutboxWorkerMaxBatchSize
+	}
+	if cfg.MinNextAttempt <= 0 {
+		cfg.MinNextAttempt = DefaultOutboxWorkerMinNextAttempt
+	}
+	if cfg.MaxNextAttempt < cfg.MinNextAttempt {
+		cfg.MaxNextAttempt = DefaultOutboxWorkerMaxNextAttempt
+	}
+
 	w := &OutboxWorker{
 		log:    log,
 		config: cfg,
@@ -66,10 +111,10 @@ type outboxWorkerJob struct {
 
 // outboxWorkerRes defines result of sending outbox event to kafka.
 type outboxWorkerRes struct {
-	id     uuid.UUID
-	now    time.Time
-	err    error
-	reason string
+	eventID     uuid.UUID
+	err         error
+	nextAttempt time.Time
+	processedAt time.Time
 }
 
 // Run starts the worker loop and blocks until ctx is cancelled.
@@ -88,10 +133,10 @@ func (w *OutboxWorker) Run(ctx context.Context, id string) {
 		}
 	}()
 
-	butchSize := w.config.MinButchSize
+	BatchSize := w.config.MinBatchSize
 	sleep := w.config.MinSleep
 
-	maxParallel := int(w.config.MaxRutin)
+	maxParallel := w.config.MaxRutin
 	if maxParallel <= 0 {
 		maxParallel = 1
 	}
@@ -122,9 +167,9 @@ func (w *OutboxWorker) Run(ctx context.Context, id string) {
 
 		// reserve a batch of pending events for this worker, send them via send loops,
 		// and then commit (sent) or delay (retry later) each event
-		numEvents := w.processBatch(ctx, id, butchSize, jobs, results)
+		numEvents := w.processBatch(ctx, id, BatchSize, jobs, results)
 
-		butchSize = w.calculateBatch(numEvents)
+		BatchSize = w.calculateBatch(numEvents)
 		sleep = w.calculateSleep(numEvents, sleep)
 
 		select {
@@ -155,23 +200,26 @@ func (w *OutboxWorker) sendLoop(
 
 		// try to send message to kafka topic
 		sendErr := w.writer.WriteMessages(ctx, msg)
-		now := time.Now().UTC()
-
 		if sendErr != nil {
-			w.log.WithError(sendErr).Errorf("failed to send event id=%s", ev.EventID)
+			w.log.WithError(sendErr).Errorf(
+				"failed to send event id=%s, topic=%s, event_type%s, attempts+%v",
+				ev.EventID, ev.Topic, ev.Type, ev.Attempts,
+			)
 			// if sending failed, report error back to results channel, so event will be delayed for future processing
 			results <- outboxWorkerRes{
-				id:     ev.EventID,
-				now:    now,
-				err:    sendErr,
-				reason: sendErr.Error(),
+				eventID:     ev.EventID,
+				err:         sendErr,
+				nextAttempt: w.nextAttemptAt(ev.Attempts),
+				processedAt: time.Now().UTC(),
 			}
 			continue
 		}
 
 		// if sending succeeded, report success back to results channel, so event will be committed as sent
 		w.log.Debugf("sent event id=%s", ev.EventID)
-		results <- outboxWorkerRes{id: ev.EventID, now: now}
+		results <- outboxWorkerRes{
+			eventID:     ev.EventID,
+			processedAt: time.Now().UTC()}
 	}
 }
 
@@ -180,12 +228,12 @@ func (w *OutboxWorker) sendLoop(
 func (w *OutboxWorker) processBatch(
 	ctx context.Context,
 	id string,
-	butchSize uint,
+	BatchSize int,
 	jobs chan<- outboxWorkerJob,
 	results <-chan outboxWorkerRes,
-) uint {
+) int {
 	// reserve a batch of pending events for this worker
-	events, err := w.box.ReserveOutboxEvents(ctx, id, butchSize)
+	events, err := w.box.ReserveOutboxEvents(ctx, id, BatchSize)
 	if err != nil {
 		w.log.WithError(err).Error("failed to reserve events")
 		return 0
@@ -197,7 +245,7 @@ func (w *OutboxWorker) processBatch(
 	for _, ev := range events {
 		select {
 		case <-ctx.Done():
-			return uint(len(events))
+			return len(events)
 			// send reserved events to send loops via jobs channel, so
 			// they will be processed and then committed or delayed
 		case jobs <- outboxWorkerJob{ev: ev}:
@@ -210,15 +258,15 @@ func (w *OutboxWorker) processBatch(
 	for i := 0; i < len(events); i++ {
 		select {
 		case <-ctx.Done():
-			return uint(len(events))
+			return len(events)
 		case r := <-results:
 			if r.err != nil {
-				pending[r.id] = DelayOutboxEventData{
-					NextAttemptAt: r.now.Add(5 * time.Minute),
-					Reason:        r.reason,
+				pending[r.eventID] = DelayOutboxEventData{
+					NextAttemptAt: r.nextAttempt,
+					Reason:        r.err.Error(),
 				}
 			} else {
-				commit[r.id] = CommitOutboxEventParams{SentAt: r.now}
+				commit[r.eventID] = CommitOutboxEventParams{SentAt: r.processedAt}
 			}
 		}
 	}
@@ -237,20 +285,33 @@ func (w *OutboxWorker) processBatch(
 		}
 	}
 
-	return uint(len(events))
+	return len(events)
+}
+
+// nextAttemptAt calculates when next attempt to process a failed event based on the number of attempts.
+func (w *OutboxWorker) nextAttemptAt(attempts int) time.Time {
+	res := time.Second * time.Duration(30*attempts)
+	if res < w.config.MinNextAttempt {
+		return time.Now().UTC().Add(w.config.MinNextAttempt)
+	}
+	if res > w.config.MaxNextAttempt {
+		return time.Now().UTC().Add(w.config.MaxNextAttempt)
+	}
+
+	return time.Now().UTC().Add(res)
 }
 
 // calculateBatch adjusts the next batch size based on how many events were processed last time.
 func (w *OutboxWorker) calculateBatch(
-	numEvents uint,
-) uint {
-	minBatch := w.config.MinButchSize
-	maxBatch := w.config.MaxButchSize
+	numEvents int,
+) int {
+	minBatch := w.config.MinBatchSize
+	maxBatch := w.config.MaxBatchSize
 	if maxBatch == 0 {
 		maxBatch = 100
 	}
 
-	var batch uint
+	var batch int
 	switch {
 	case numEvents == 0:
 		batch = minBatch
@@ -272,7 +333,7 @@ func (w *OutboxWorker) calculateBatch(
 
 // calculateSleep adjusts the delay before the next iteration based on how many events were processed.
 func (w *OutboxWorker) calculateSleep(
-	numEvents uint,
+	numEvents int,
 	lastSleep time.Duration,
 ) time.Duration {
 	minSleep := w.config.MinSleep
@@ -288,11 +349,11 @@ func (w *OutboxWorker) calculateSleep(
 			sleep = lastSleep * 2
 		}
 
-	case numEvents >= w.config.MaxButchSize:
+	case numEvents >= w.config.MaxBatchSize:
 		sleep = 0
 
 	default:
-		fill := float64(numEvents) / float64(w.config.MaxButchSize)
+		fill := float64(numEvents) / float64(w.config.MaxBatchSize)
 
 		switch {
 		case fill >= 0.75:
