@@ -13,9 +13,9 @@ import (
 
 const cleanFailedOutboxEvents = `-- name: CleanFailedOutboxEvents :exec
 UPDATE outbox_events
-SET status = 'pending',
+SET
+    status = 'pending',
     attempts = 0,
-    last_attempt_at = NULL,
     next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'failed'
 `
@@ -27,9 +27,10 @@ func (q *Queries) CleanFailedOutboxEvents(ctx context.Context) error {
 
 const cleanProcessingOutboxEvents = `-- name: CleanProcessingOutboxEvents :exec
 UPDATE outbox_events
-SET status = 'pending',
+SET
+    status = 'pending',
     reserved_by = NULL,
-    last_attempt_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing'
 `
 
@@ -40,13 +41,16 @@ func (q *Queries) CleanProcessingOutboxEvents(ctx context.Context) error {
 
 const cleanReservedProcessingOutboxEvents = `-- name: CleanReservedProcessingOutboxEvents :exec
 UPDATE outbox_events
-SET reserved_by = NULL
+SET
+    status = 'pending',
+    reserved_by = NULL,
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing'
-    AND reserved_by = $1
+  AND reserved_by = ANY($1::text[])
 `
 
-func (q *Queries) CleanReservedProcessingOutboxEvents(ctx context.Context, processID pgtype.Text) error {
-	_, err := q.db.Exec(ctx, cleanReservedProcessingOutboxEvents, processID)
+func (q *Queries) CleanReservedProcessingOutboxEvents(ctx context.Context, processIds []string) error {
+	_, err := q.db.Exec(ctx, cleanReservedProcessingOutboxEvents, processIds)
 	return err
 }
 

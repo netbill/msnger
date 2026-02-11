@@ -101,10 +101,8 @@ func NewInboxProcessor(
 	}
 }
 
-// inboxProcessorSlot is a slot for processing one event. It is used to limit the number of events being processed in parallel.
 type inboxProcessorSlot struct{}
 
-// takeSlot tries to take a slot for processing an event. It returns false if the context is done.
 func takeSlot(ctx context.Context, slots <-chan inboxProcessorSlot) bool {
 	select {
 	case <-ctx.Done():
@@ -114,12 +112,17 @@ func takeSlot(ctx context.Context, slots <-chan inboxProcessorSlot) bool {
 	}
 }
 
-// inboxProcessorJob defines job for processing inbox event.
+func giveSlot(slots chan<- inboxProcessorSlot) {
+	select {
+	case slots <- inboxProcessorSlot{}:
+	default:
+	}
+}
+
 type inboxProcessorJob struct {
 	event msnger.InboxEvent
 }
 
-// sendJob sends a job for processing an event or returns false if context is done.
 func sendJob(ctx context.Context, jobs chan<- inboxProcessorJob, job inboxProcessorJob) bool {
 	select {
 	case <-ctx.Done():
@@ -129,18 +132,6 @@ func sendJob(ctx context.Context, jobs chan<- inboxProcessorJob, job inboxProces
 	}
 }
 
-// giveSlot gives back a slot after processing an event.
-func giveSlot(slots chan<- inboxProcessorSlot) {
-	select {
-	case slots <- inboxProcessorSlot{}:
-	default:
-	}
-}
-
-// Route registers a handler for the given event type.
-// It panics if a handler for this event type is already registered.
-//
-// Route is expected to be called during initialization, before RunProcess.
 func (p *InboxProcessor) Route(eventType string, handler msnger.InboxHandlerFunc) {
 	if _, ok := p.route[eventType]; ok {
 		panic(fmt.Errorf("double handler for event type=%s", eventType))
@@ -151,13 +142,15 @@ func (p *InboxProcessor) Route(eventType string, handler msnger.InboxHandlerFunc
 
 // RunProcess starts processing inbox events for the given process ID.
 func (p *InboxProcessor) RunProcess(ctx context.Context, processID string) {
+	entry := p.log.WithField(logfields.ProcessID, processID)
+
 	defer func() {
 		if err := p.StopProcess(context.Background(), processID); err != nil {
-			p.log.WithError(err).
-				WithField(logfields.ProcessID, processID).
-				Error("failed to stop inbox processor")
+			entry.WithError(err).Error("failed to stop inbox processor")
 		}
 	}()
+
+	entry.Info("starting inbox processor")
 
 	// Initialize the slots channel with the configured number of in-flight processing slots.
 	slots := make(chan inboxProcessorSlot, p.config.Routines*4)
@@ -210,7 +203,7 @@ func (p *InboxProcessor) feederLoop(
 			continue
 		}
 
-		limit := p.calculateBatch(free)
+		limit := calculateBatch(free, p.config.MinBatch, p.config.MaxBatch)
 
 		// Reserve a batch of inbox events for processing. If there are no events,
 		// increase the sleep duration before the next attempt.
@@ -332,79 +325,12 @@ func (p *InboxProcessor) nextAttemptAt(attempts int32) time.Time {
 	return time.Now().UTC().Add(res)
 }
 
-func (p *InboxProcessor) calculateBatch(numEvents int) int {
-	minBatch := p.config.MinBatch
-	maxBatch := p.config.MaxBatch
-	if maxBatch == 0 {
-		maxBatch = 100
-	}
-
-	var batch int
-	switch {
-	case numEvents == 0:
-		batch = minBatch
-	case numEvents >= maxBatch:
-		batch = maxBatch
-	default:
-		batch = numEvents * 2
-	}
-
-	if batch < minBatch {
-		batch = minBatch
-	}
-	if batch > maxBatch {
-		batch = maxBatch
-	}
-
-	return batch
-}
-
 func (p *InboxProcessor) sleep(
 	ctx context.Context,
 	numEvents int,
 	lastSleep time.Duration,
 ) time.Duration {
-	minSleep := p.config.MinSleep
-	maxSleep := p.config.MaxSleep
-
-	var sleep time.Duration
-
-	switch {
-	case numEvents == 0:
-		if lastSleep == 0 {
-			sleep = minSleep
-		} else {
-			sleep = lastSleep * 2
-		}
-
-	case numEvents >= p.config.MaxBatch:
-		sleep = 0
-
-	default:
-		fill := float64(numEvents) / float64(p.config.MaxBatch)
-
-		switch {
-		case fill >= 0.75:
-			sleep = 0
-		case fill >= 0.5:
-			sleep = minSleep
-		case fill >= 0.25:
-			sleep = minSleep * 2
-		default:
-			sleep = minSleep * 4
-		}
-	}
-
-	if sleep < minSleep {
-		sleep = minSleep
-	}
-	if sleep > maxSleep {
-		sleep = maxSleep
-	}
-
-	if sleep <= 0 {
-		return sleep
-	}
+	sleep := calculateSleep(numEvents, p.config.MaxBatch, lastSleep, p.config.MinSleep, p.config.MaxSleep)
 
 	t := time.NewTimer(sleep)
 	defer t.Stop()
@@ -419,20 +345,5 @@ func (p *InboxProcessor) sleep(
 
 // StopProcess stops processing inbox events for the given process ID by cleaning up any events that are currently marked as processing for that processor.
 func (p *InboxProcessor) StopProcess(ctx context.Context, processID string) error {
-	return p.box.CleanProcessingInboxEventForProcessor(ctx, processID)
-}
-
-// CleanInboxProcessing removes all inbox events that are currently marked as processing, regardless of the processor that reserved them.
-func (p *InboxProcessor) CleanInboxProcessing(ctx context.Context) error {
-	return p.box.CleanProcessingInboxEvents(ctx)
-}
-
-// CleanInboxProcessingForProcessID removes all inbox events that are currently marked as processing by a specific processor, identified by the process ID.
-func (p *InboxProcessor) CleanInboxProcessingForProcessID(ctx context.Context, processID string) error {
-	return p.box.CleanProcessingInboxEventForProcessor(ctx, processID)
-}
-
-// CleanInboxFailed removes all inbox events that are currently marked as failed, regardless of the processor that reserved them.
-func (p *InboxProcessor) CleanInboxFailed(ctx context.Context) error {
-	return p.box.CleanFailedInboxEvents(ctx)
+	return p.box.CleanProcessingInboxEvents(ctx, processID)
 }

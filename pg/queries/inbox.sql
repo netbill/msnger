@@ -109,7 +109,6 @@ SET
     attempts = attempts + 1,
     reserved_by = NULL,
     last_attempt_at = (now() AT TIME ZONE 'UTC'),
-    processed_at = (now() AT TIME ZONE 'UTC'),
     last_error = sqlc.arg(last_error)
 WHERE event_id = ANY(sqlc.arg(event_id)::uuid)
     AND status = 'processing'
@@ -121,7 +120,7 @@ UPDATE inbox_events
 SET
     status = 'pending',
     reserved_by = NULL,
-    processed_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing';
 
 -- name: CleanReservedProcessingInboxEvents :exec
@@ -129,16 +128,14 @@ UPDATE inbox_events
 SET
     status = 'pending',
     reserved_by = NULL,
-    processed_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing'
-    AND reserved_by = sqlc.arg(process_id);
+    AND reserved_by = ANY(sqlc.arg(process_ids)::text[]);
 
 -- name: CleanFailedInboxEvents :exec
 UPDATE inbox_events
 SET
     status = 'pending',
     attempts = 0,
-    reserved_by = NULL,
-    next_attempt_at = (now() AT TIME ZONE 'UTC'),
-    processed_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'failed';

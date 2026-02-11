@@ -127,21 +127,25 @@ WHERE e.event_id = inp.event_id
 
 -- name: CleanProcessingOutboxEvents :exec
 UPDATE outbox_events
-SET status = 'pending',
+SET
+    status = 'pending',
     reserved_by = NULL,
-    last_attempt_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing';
 
 -- name: CleanReservedProcessingOutboxEvents :exec
 UPDATE outbox_events
-SET reserved_by = NULL
+SET
+    status = 'pending',
+    reserved_by = NULL,
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing'
-    AND reserved_by = sqlc.arg(process_id);
+  AND reserved_by = ANY(sqlc.arg(process_ids)::text[]);
 
 -- name: CleanFailedOutboxEvents :exec
 UPDATE outbox_events
-SET status = 'pending',
+SET
+    status = 'pending',
     attempts = 0,
-    last_attempt_at = NULL,
     next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'failed';

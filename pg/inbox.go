@@ -180,20 +180,17 @@ func (i *inbox) FailedInboxEvent(
 }
 
 // CleanProcessingInboxEvents removes all inbox events that are currently marked as processing.
-func (i *inbox) CleanProcessingInboxEvents(ctx context.Context) error {
-	err := i.queries().CleanProcessingInboxEvents(ctx)
-	if err != nil {
-		return fmt.Errorf("clean processing inbox events: %w", err)
-	}
-
-	return nil
-}
-
-// CleanProcessingInboxEventForProcessor removes all inbox events that are currently marked as processing by a specific processor.
-func (i *inbox) CleanProcessingInboxEventForProcessor(ctx context.Context, processID string) error {
-	err := i.queries().CleanReservedProcessingInboxEvents(ctx, pgtype.Text{String: processID, Valid: true})
-	if err != nil {
-		return fmt.Errorf("clean processing inbox events for processor: %w", err)
+func (i *inbox) CleanProcessingInboxEvents(ctx context.Context, processIDs ...string) error {
+	if len(processIDs) == 0 {
+		err := i.queries().CleanProcessingInboxEvents(ctx)
+		if err != nil {
+			return fmt.Errorf("clean processing inbox events: %w", err)
+		}
+	} else {
+		err := i.queries().CleanReservedProcessingInboxEvents(ctx, processIDs)
+		if err != nil {
+			return fmt.Errorf("clean processing inbox events for processor: %w", err)
+		}
 	}
 
 	return nil

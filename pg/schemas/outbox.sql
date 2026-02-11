@@ -27,9 +27,7 @@ CREATE TABLE outbox_events (
     last_error      VARCHAR,
 
     sent_at    TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT (now() AT TIME ZONE 'UTC'),
-
-    CHECK (status IN ('pending','processing','sent','failed'))
+    created_at TIMESTAMPTZ NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')
 );
 
 CREATE INDEX outbox_events_pending_ready_idx

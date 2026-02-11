@@ -16,9 +16,7 @@ UPDATE inbox_events
 SET
     status = 'pending',
     attempts = 0,
-    reserved_by = NULL,
-    next_attempt_at = (now() AT TIME ZONE 'UTC'),
-    processed_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'failed'
 `
 
@@ -32,7 +30,7 @@ UPDATE inbox_events
 SET
     status = 'pending',
     reserved_by = NULL,
-    processed_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing'
 `
 
@@ -46,13 +44,13 @@ UPDATE inbox_events
 SET
     status = 'pending',
     reserved_by = NULL,
-    processed_at = NULL
+    next_attempt_at = (now() AT TIME ZONE 'UTC')
 WHERE status = 'processing'
-    AND reserved_by = $1
+    AND reserved_by = ANY($1::text[])
 `
 
-func (q *Queries) CleanReservedProcessingInboxEvents(ctx context.Context, processID pgtype.Text) error {
-	_, err := q.db.Exec(ctx, cleanReservedProcessingInboxEvents, processID)
+func (q *Queries) CleanReservedProcessingInboxEvents(ctx context.Context, processIds []string) error {
+	_, err := q.db.Exec(ctx, cleanReservedProcessingInboxEvents, processIds)
 	return err
 }
 
@@ -178,7 +176,6 @@ SET
     attempts = attempts + 1,
     reserved_by = NULL,
     last_attempt_at = (now() AT TIME ZONE 'UTC'),
-    processed_at = (now() AT TIME ZONE 'UTC'),
     last_error = $1
 WHERE event_id = ANY($2::uuid)
     AND status = 'processing'

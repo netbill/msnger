@@ -183,8 +183,8 @@ func (b *outbox) DelayOutboxEvents(
 	return nil
 }
 
-// FailOutboxEvents marks a batch of outbox events as failed by a specific processor.
-func (b *outbox) FailOutboxEvents(
+// FailedOutboxEvents marks a batch of outbox events as failed by a specific processor.
+func (b *outbox) FailedOutboxEvents(
 	ctx context.Context,
 	processID string,
 	events map[uuid.UUID]FailedOutboxEventData,
@@ -211,20 +211,17 @@ func (b *outbox) FailOutboxEvents(
 }
 
 // CleanProcessingOutboxEvent cleans up outbox events which status is processing
-func (b *outbox) CleanProcessingOutboxEvent(ctx context.Context) error {
-	err := b.queries().CleanProcessingOutboxEvents(ctx)
-	if err != nil {
-		return fmt.Errorf("clean processing outbox events: %w", err)
-	}
-
-	return nil
-}
-
-// CleanProcessingOutboxEventForProcessor cleans up outbox events which status is processing for specific processor
-func (b *outbox) CleanProcessingOutboxEventForProcessor(ctx context.Context, processID string) error {
-	err := b.queries().CleanReservedProcessingOutboxEvents(ctx, pgtype.Text{String: processID, Valid: true})
-	if err != nil {
-		return fmt.Errorf("clean processing outbox events for processor: %w", err)
+func (b *outbox) CleanProcessingOutboxEvent(ctx context.Context, processIDs ...string) error {
+	if len(processIDs) == 0 {
+		err := b.queries().CleanProcessingOutboxEvents(ctx)
+		if err != nil {
+			return fmt.Errorf("clean processing outbox events: %w", err)
+		}
+	} else {
+		err := b.queries().CleanReservedProcessingOutboxEvents(ctx, processIDs)
+		if err != nil {
+			return fmt.Errorf("clean processing outbox events for processor: %w", err)
+		}
 	}
 
 	return nil
