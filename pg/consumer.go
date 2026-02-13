@@ -59,14 +59,8 @@ func NewConsumer(
 
 // Read starts the consumer loop that reads messages from Kafka, writes them to the inbox, and commits them.
 func (c *Consumer) Read(ctx context.Context, reader *kafka.Reader) {
-	c.log.WithField(logfields.EventTopicFiled, reader.Config().Topic).Infof("starting reading process")
-
 	backoff := c.config.MinBackoff
 	for {
-		if ctx.Err() != nil {
-			return
-		}
-
 		m, err := c.fetchMessage(ctx, reader)
 		if err != nil {
 			if !c.backoffOrStop(ctx, &backoff) {
@@ -97,47 +91,50 @@ func (c *Consumer) Read(ctx context.Context, reader *kafka.Reader) {
 // It logs and returns an error if fetching fails.
 func (c *Consumer) fetchMessage(ctx context.Context, r *kafka.Reader) (kafka.Message, error) {
 	m, err := r.FetchMessage(ctx)
-	if err != nil {
+	switch {
+	case ctx.Err() != nil:
+		return kafka.Message{}, ctx.Err()
+	case err != nil:
 		c.log.WithError(err).
 			WithField(logfields.EventTopicFiled, r.Config().Topic).
 			Errorf("failed to fetch message from Kafka")
-
 		return kafka.Message{}, fmt.Errorf("fetch message: %w", err)
+	default:
+		return m, nil
 	}
-
-	return m, nil
 }
 
 // writeInbox attempts to write the fetched message to the inbox.
 // It handles the case where the inbox event already exists and logs appropriately.
 func (c *Consumer) writeInbox(ctx context.Context, m kafka.Message) error {
 	_, err := c.inbox.WriteInboxEvent(ctx, m)
-	if err != nil {
-		if errors.Is(err, ErrInboxEventAlreadyExists) {
-			c.log.WithFields(logfields.FromMessage(m)).Info("inbox event already exists")
-			return nil
-		}
-
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case errors.Is(err, ErrInboxEventAlreadyExists):
+		c.log.WithFields(logfields.FromMessage(m)).Info("inbox event already exists")
+		return nil
+	case err != nil:
 		c.log.WithError(err).WithFields(logfields.FromMessage(m)).Errorf("failed to write inbox event")
 		return fmt.Errorf("write inbox event: %w", err)
+	default:
+		return nil
 	}
-
-	return nil
 }
 
 // commitMessage attempts to commit the processed message in Kafka.
 // It logs and returns an error if committing fails.
 func (c *Consumer) commitMessage(ctx context.Context, r *kafka.Reader, m kafka.Message) error {
-	if err := r.CommitMessages(ctx, m); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
+	err := r.CommitMessages(ctx, m)
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil:
 		c.log.WithError(err).WithFields(logfields.FromMessage(m)).Errorf("failed to commit message in Kafka")
 		return fmt.Errorf("commit message: %w", err)
+	default:
+		return nil
 	}
-
-	return nil
 }
 
 // backoffOrStop implements an exponential backoff strategy for retrying operations.

@@ -177,7 +177,7 @@ SET
     reserved_by = NULL,
     last_attempt_at = (now() AT TIME ZONE 'UTC'),
     last_error = $1
-WHERE event_id = ANY($2::uuid)
+WHERE event_id = ($2::uuid)
     AND status = 'processing'
     AND reserved_by = $3
 RETURNING event_id, seq, topic, key, type, version, producer, payload, partition, kafka_offset, reserved_by, status, attempts, next_attempt_at, last_attempt_at, last_error, processed_at, produced_at, created_at
@@ -279,7 +279,7 @@ SET
     last_attempt_at = (now() AT TIME ZONE 'UTC'),
     processed_at = (now() AT TIME ZONE 'UTC'),
     last_error = NULL
-WHERE event_id = ANY($1::uuid)
+WHERE event_id = ($1::uuid)
     AND status = 'processing'
     AND reserved_by = $2
 RETURNING event_id, seq, topic, key, type, version, producer, payload, partition, kafka_offset, reserved_by, status, attempts, next_attempt_at, last_attempt_at, last_error, processed_at, produced_at, created_at

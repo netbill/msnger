@@ -83,7 +83,7 @@ SET
     last_attempt_at = (now() AT TIME ZONE 'UTC'),
     processed_at = (now() AT TIME ZONE 'UTC'),
     last_error = NULL
-WHERE event_id = ANY(sqlc.arg(event_id)::uuid)
+WHERE event_id = (sqlc.arg(event_id)::uuid)
     AND status = 'processing'
     AND reserved_by = sqlc.arg(worker_id)
 RETURNING *;
@@ -110,7 +110,7 @@ SET
     reserved_by = NULL,
     last_attempt_at = (now() AT TIME ZONE 'UTC'),
     last_error = sqlc.arg(last_error)
-WHERE event_id = ANY(sqlc.arg(event_id)::uuid)
+WHERE event_id = (sqlc.arg(event_id)::uuid)
     AND status = 'processing'
     AND reserved_by = sqlc.arg(worker_id)
 RETURNING *;

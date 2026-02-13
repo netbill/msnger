@@ -59,7 +59,7 @@ type OutboxEventStatus string
 
 const (
 	OutboxEventStatusPending    OutboxEventStatus = "pending"
-	OutboxEventStatusProcessed  OutboxEventStatus = "processed"
+	OutboxEventStatusSent       OutboxEventStatus = "sent"
 	OutboxEventStatusProcessing OutboxEventStatus = "processing"
 	OutboxEventStatusFailed     OutboxEventStatus = "failed"
 )

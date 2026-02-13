@@ -2,7 +2,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TYPE outbox_event_status AS ENUM (
     'pending',
-    'processed',
+    'sent',
     'processing',
     'failed'
 );
