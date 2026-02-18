@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/netbill/eventbox"
@@ -18,7 +19,6 @@ const (
 	DefaultMaxConsumerBackoff = 5 * time.Second
 )
 
-// ConsumerConfig holds the configuration for the Consumer.
 type ConsumerConfig struct {
 	// MinBackoff is the minimum duration to wait before retrying after a failure.
 	// If not set, it defaults to DefaultMinConsumerBackoff.
@@ -31,15 +31,12 @@ type ConsumerConfig struct {
 type Consumer struct {
 	log    *logium.Entry
 	inbox  inbox
+	topics map[string]eventbox.TopicConsumerConfig
 	config ConsumerConfig
 }
 
 // NewConsumer creates a new Consumer with the given logger, inbox, and configuration.
-func NewConsumer(
-	log *logium.Entry,
-	db *pgdbx.DB,
-	config ConsumerConfig,
-) eventbox.Consumer {
+func NewConsumer(log *logium.Entry, db *pgdbx.DB, config ConsumerConfig) eventbox.Consumer {
 	if config.MinBackoff <= 0 {
 		config.MinBackoff = DefaultMinConsumerBackoff
 	}
@@ -53,14 +50,60 @@ func NewConsumer(
 	return &Consumer{
 		log:    log,
 		inbox:  inbox{db: db},
+		topics: make(map[string]eventbox.TopicConsumerConfig),
 		config: config,
 	}
 }
 
-// Read starts the consumer loop that reads messages from Kafka, writes them to the inbox, and commits them.
-func (c *Consumer) Read(ctx context.Context, reader *kafka.Reader) {
-	backoff := c.config.MinBackoff
+func (c *Consumer) AddTopic(topic string, config eventbox.TopicConsumerConfig) {
+	_, ok := c.topics[topic]
+	if ok {
+		panic(fmt.Sprintf("topic %s already configured", topic))
+	}
 
+	if config.Instances <= 0 {
+		panic(fmt.Sprintf("instances %d must be greater than zero", config.Instances))
+	}
+
+	c.topics[topic] = config
+}
+
+// Run starts the consumer loop that reads messages from Kafka, writes them to the inbox, and commits them.
+func (c *Consumer) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+
+	for topic, cfg := range c.topics {
+		topic := topic
+		cfg := cfg
+
+		for i := 0; i < cfg.Instances; i++ {
+			reader := kafka.NewReader(kafka.ReaderConfig{
+				Topic:          topic,
+				Brokers:        cfg.Brokers,
+				GroupID:        cfg.GroupID,
+				QueueCapacity:  cfg.QueueCapacity,
+				MaxBytes:       cfg.MaxBytes,
+				MinBytes:       cfg.MinBytes,
+				MaxWait:        cfg.MaxWait,
+				CommitInterval: cfg.CommitInterval,
+				StartOffset:    cfg.CalculateStartOffset(),
+			})
+
+			wg.Add(1)
+			go func(r *kafka.Reader) {
+				defer wg.Done()
+				defer r.Close()
+				c.subscribe(ctx, r)
+			}(reader)
+		}
+	}
+
+	<-ctx.Done()
+	wg.Wait()
+}
+
+func (c *Consumer) subscribe(ctx context.Context, reader *kafka.Reader) {
+	backoff := c.config.MinBackoff
 	for {
 		if ctx.Err() != nil {
 			return
@@ -87,7 +130,6 @@ func (c *Consumer) Read(ctx context.Context, reader *kafka.Reader) {
 			}
 			continue
 		}
-
 		backoff = c.config.MinBackoff
 	}
 }

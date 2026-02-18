@@ -173,7 +173,11 @@ func (w *InboxWorker) Run(ctx context.Context) {
 }
 
 // feederLoop continuously reserves batches of inbox events and sends them to the jobs channel for processing.
-func (w *InboxWorker) feederLoop(ctx context.Context, slots chan inboxWorkerSlot, jobs chan<- inboxWorkerJob) {
+func (w *InboxWorker) feederLoop(
+	ctx context.Context,
+	slots chan inboxWorkerSlot,
+	jobs chan<- inboxWorkerJob,
+) {
 	defer close(jobs)
 
 	for {
@@ -291,9 +295,7 @@ func (w *InboxWorker) nextAttemptAt(attempts int32) time.Time {
 	return time.Now().UTC().Add(res)
 }
 
-func (w *InboxWorker) sleep(
-	ctx context.Context,
-) {
+func (w *InboxWorker) sleep(ctx context.Context) {
 	t := time.NewTimer(w.config.Sleep)
 	defer t.Stop()
 
@@ -306,6 +308,10 @@ func (w *InboxWorker) sleep(
 }
 
 // Stop stops processing inbox events for the given process ID by cleaning up any events that are currently marked as processing for that worker.
-func (w *InboxWorker) Stop(ctx context.Context) error {
-	return w.box.CleanProcessingInboxEvents(ctx, w.id)
+func (w *InboxWorker) Stop(ctx context.Context) {
+	if err := w.box.CleanProcessingInboxEvents(ctx, w.id); err != nil {
+		w.log.WithError(err).Error("failed to clean processing inbox events")
+	}
+
+	w.log.Info("inbox worker stopped successfully")
 }

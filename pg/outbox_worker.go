@@ -92,15 +92,13 @@ func NewOutboxWorker(
 		config.MaxNextAttempt = config.MinNextAttempt
 	}
 
-	w := &OutboxWorker{
+	return &OutboxWorker{
 		id:     id,
 		log:    log.WithField("worker_id", id),
 		config: config,
 		box:    outbox{db: db},
 		writer: writer,
 	}
-
-	return w
 }
 
 type outboxWorkerJob struct {
@@ -302,9 +300,7 @@ func (w *OutboxWorker) nextAttemptAt(attempts int32) time.Time {
 	return time.Now().UTC().Add(res)
 }
 
-func (w *OutboxWorker) sleep(
-	ctx context.Context,
-) {
+func (w *OutboxWorker) sleep(ctx context.Context) {
 	t := time.NewTimer(w.config.Sleep)
 	defer t.Stop()
 
@@ -316,12 +312,14 @@ func (w *OutboxWorker) sleep(
 	}
 }
 
-func (w *OutboxWorker) Stop(ctx context.Context) error {
-	err := w.box.CleanProcessingOutboxEvent(ctx, w.id)
-	if err != nil {
+func (w *OutboxWorker) Stop(ctx context.Context) {
+	if err := w.box.CleanProcessingOutboxEvent(ctx, w.id); err != nil {
 		w.log.WithError(err).Error("failed to clean processing events for worker")
-		return err
 	}
 
-	return nil
+	if err := w.writer.Close(); err != nil {
+		w.log.WithError(err).Error("failed to close writer")
+	}
+
+	w.log.Info("outbox worker stopped successfully")
 }

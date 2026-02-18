@@ -16,7 +16,7 @@ const (
 	EventAttemptFiled  = "event_attempt"
 )
 
-func FromHeader(hs headers.MessageRequiredHeaders) logium.Fields {
+func FromHeader(hs headers.MessageRequired) logium.Fields {
 	return map[string]any{
 		EventIDFiled:       hs.EventID,
 		EventTypeFiled:     hs.EventType,

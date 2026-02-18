@@ -1,6 +1,7 @@
 package eventbox
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -71,4 +72,27 @@ func (e *OutboxEvent) ToKafkaMessage() kafka.Message {
 			},
 		},
 	}
+}
+
+type Message struct {
+	Topic   string
+	Key     []byte
+	Payload []byte
+	Headers headers.MessageRequired
+}
+
+type Producer interface {
+	WriteToOutbox(ctx context.Context, msg Message) error
+	WriteToKafka(ctx context.Context, msg Message) error
+}
+
+type OutboxWorker interface {
+	Run(ctx context.Context)
+	Stop(ctx context.Context)
+}
+
+type OutboxCleaner interface {
+	CleanOutboxProcessing(ctx context.Context, processIDs ...string) error
+
+	CleanOutboxFailed(ctx context.Context) error
 }

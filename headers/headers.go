@@ -16,6 +16,24 @@ const (
 	ContentType  = "content_type"
 )
 
+type MessageRequired struct {
+	EventID      uuid.UUID
+	EventType    string
+	EventVersion int32
+	Producer     string
+	ContentType  string
+}
+
+func (m MessageRequired) ToKafka() []kafka.Header {
+	return []kafka.Header{
+		{Key: EventID, Value: []byte(m.EventID.String())},
+		{Key: EventType, Value: []byte(m.EventType)},
+		{Key: EventVersion, Value: []byte(strconv.FormatInt(int64(m.EventVersion), 10))},
+		{Key: Producer, Value: []byte(m.Producer)},
+		{Key: ContentType, Value: []byte(m.ContentType)},
+	}
+}
+
 func RequiredHeaderValue(hs []kafka.Header, key string) ([]byte, error) {
 	var (
 		found bool
@@ -42,16 +60,8 @@ func RequiredHeaderValue(hs []kafka.Header, key string) ([]byte, error) {
 	return value, nil
 }
 
-type MessageRequiredHeaders struct {
-	EventID      uuid.UUID
-	EventType    string
-	EventVersion int32
-	Producer     string
-	ContentType  string
-}
-
-func ParseMessageRequiredHeaders(hs []kafka.Header) (MessageRequiredHeaders, error) {
-	var out MessageRequiredHeaders
+func ParseMessageRequiredHeaders(hs []kafka.Header) (MessageRequired, error) {
+	var out MessageRequired
 
 	eventIDBytes, err := RequiredHeaderValue(hs, EventID)
 	if err != nil {
@@ -74,7 +84,7 @@ func ParseMessageRequiredHeaders(hs []kafka.Header) (MessageRequiredHeaders, err
 	}
 	v64, err := strconv.ParseInt(string(eventVersionBytes), 10, 32)
 	if err != nil {
-		return MessageRequiredHeaders{}, fmt.Errorf("invalid %s header: %w", EventVersion, err)
+		return MessageRequired{}, fmt.Errorf("invalid %s header: %w", EventVersion, err)
 	}
 	out.EventVersion = int32(v64)
 

@@ -1,6 +1,7 @@
 package eventbox
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -74,4 +75,65 @@ func (e *InboxEvent) ToKafkaMessage() kafka.Message {
 			},
 		},
 	}
+}
+
+// TopicConsumerConfig holds the configuration for the Consumer.
+type TopicConsumerConfig struct {
+	// Instances defines the number of consumer instances (Kafka readers)
+	// that will subscribe to the same topic within the same group.
+	Instances int
+
+	//GroupID is the Kafka consumer group ID to use when subscribing to topics.
+	GroupID string
+
+	// Brokers is the list of Kafka broker addresses to connect to.
+	Brokers []string
+
+	// MinBytes is the minimum number of bytes to fetch in a single request to Kafka.
+	MinBytes int
+	// MaxBytes is the maximum number of bytes to fetch in a single request to Kafka.
+	MaxBytes int
+
+	// MaxWait is the maximum amount of time to wait for new messages from Kafka before returning an empty batch.
+	MaxWait time.Duration
+
+	// CommitInterval is the interval at which to commit messages in Kafka.
+	CommitInterval time.Duration
+
+	// StartOffset is the offset from which to start consuming messages in Kafka.
+	StartOffset string
+
+	// QueueCapacity is the capacity of the internal queue used by the Kafka reader.
+	QueueCapacity int
+}
+
+func (c *TopicConsumerConfig) CalculateStartOffset() int64 {
+	switch c.StartOffset {
+	case "", "last", "latest":
+		return kafka.LastOffset
+	case "first", "earliest":
+		return kafka.FirstOffset
+	default:
+		return kafka.LastOffset
+	}
+}
+
+type Consumer interface {
+	Run(ctx context.Context)
+	AddTopic(topic string, config TopicConsumerConfig)
+}
+
+type InboxHandlerFunc func(ctx context.Context, msg kafka.Message) error
+
+type InboxWorker interface {
+	Run(ctx context.Context)
+	Stop(ctx context.Context)
+
+	Route(eventType string, handler InboxHandlerFunc)
+}
+
+type InboxCleaner interface {
+	CleanInboxProcessing(ctx context.Context, processIDs ...string) error
+
+	CleanInboxFailed(ctx context.Context) error
 }
