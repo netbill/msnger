@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	eventpg "github.com/netbill/eventbox/pg"
+	"github.com/netbill/eventbox/pg"
 	"github.com/netbill/logium"
 	"github.com/netbill/pgdbx"
 )
@@ -19,9 +19,9 @@ func CleanupInboxFailed(ctx context.Context, log *logium.Entry, url string) erro
 
 	db := pgdbx.NewDB(pool)
 
-	inboxCleaner := eventpg.NewInboxCleaner(db)
+	inboxCleaner := pg.NewInbox(db)
 
-	err = inboxCleaner.CleanInboxFailed(ctx)
+	err = inboxCleaner.CleanFailedInboxEvents(ctx)
 	if err != nil {
 		log.WithError(err).Error("failed to clean inbox failed")
 		return err
@@ -40,9 +40,9 @@ func CleanupInboxProcessing(ctx context.Context, log *logium.Entry, url string, 
 
 	db := pgdbx.NewDB(pool)
 
-	inboxCleaner := eventpg.NewInboxCleaner(db)
+	inboxCleaner := pg.NewInbox(db)
 
-	err = inboxCleaner.CleanInboxProcessing(ctx, processIDs...)
+	err = inboxCleaner.CleanProcessingInboxEvents(ctx, processIDs...)
 	if err != nil {
 		log.WithError(err).Error("failed to clean inbox processing")
 		return err

@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/netbill/ape"
 	"github.com/netbill/eventbox"
 	"github.com/netbill/eventbox/headers"
 	"github.com/netbill/eventbox/pg/sqlc"
@@ -17,13 +16,12 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-var (
-	ErrInboxEventAlreadyExists = ape.DeclareError("INBOX_EVENT_ALREADY_EXISTS")
-	ErrInboxEventNotFound      = ape.DeclareError("INBOX_EVENT_NOT_FOUND")
-)
-
 type inbox struct {
 	db *pgdbx.DB
+}
+
+func NewInbox(db *pgdbx.DB) eventbox.Inbox {
+	return &inbox{db: db}
 }
 
 func (i *inbox) queries() *sqlc.Queries {
@@ -61,7 +59,7 @@ func (i *inbox) WriteInboxEvent(
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return eventbox.InboxEvent{}, ErrInboxEventAlreadyExists.Raise(err)
+			return eventbox.InboxEvent{}, fmt.Errorf("inbox event with the same ID already exists: %w", eventbox.ErrInboxEventAlreadyExists)
 		}
 
 		return eventbox.InboxEvent{}, fmt.Errorf("insert inbox event: %w", err)
@@ -78,7 +76,7 @@ func (i *inbox) GetInboxEventByID(
 	res, err := i.queries().GetInboxEventByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return eventbox.InboxEvent{}, ErrInboxEventNotFound.Raise(err)
+			return eventbox.InboxEvent{}, fmt.Errorf("inbox event not found: %w", eventbox.ErrInboxEventNotFound)
 		}
 		return eventbox.InboxEvent{}, fmt.Errorf("get inbox event by id: %w", err)
 	}

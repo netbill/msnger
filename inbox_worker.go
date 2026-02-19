@@ -1,4 +1,4 @@
-package pg
+package eventbox
 
 import (
 	"context"
@@ -6,10 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/netbill/eventbox"
-	"github.com/netbill/eventbox/logfields"
-	"github.com/netbill/logium"
-	"github.com/netbill/pgdbx"
+	"github.com/segmentio/kafka-go"
 )
 
 const (
@@ -53,22 +50,24 @@ type InboxWorkerConfig struct {
 	MaxAttempts int32
 }
 
+// InboxWorker is responsible for processing inbox events for a given process ID by reserving events from the inbox,
+// handling them using registered handlers, and updating their status based on the processing outcome.
 type InboxWorker struct {
 	id  string
-	log *logium.Entry
+	log Logger
 
-	box    inbox
+	box    Inbox
+	route  map[string]InboxHandlerFunc
 	config InboxWorkerConfig
-	route  map[string]eventbox.InboxHandlerFunc
 }
 
 // NewInboxWorker creates a new InboxWorker.
 func NewInboxWorker(
 	id string,
-	log *logium.Entry,
-	db *pgdbx.DB,
+	log Logger,
+	box Inbox,
 	config InboxWorkerConfig,
-) eventbox.InboxWorker {
+) *InboxWorker {
 	if config.Routines <= 0 {
 		config.Routines = DefaultInboxWorkerRoutines
 	}
@@ -94,9 +93,9 @@ func NewInboxWorker(
 	return &InboxWorker{
 		id:     id,
 		log:    log.WithField("worker_id", id),
-		box:    inbox{db: db},
+		box:    box,
 		config: config,
-		route:  make(map[string]eventbox.InboxHandlerFunc),
+		route:  make(map[string]InboxHandlerFunc),
 	}
 }
 
@@ -121,7 +120,7 @@ func giveSlot(ctx context.Context, slots chan<- inboxWorkerSlot) bool {
 }
 
 type inboxWorkerJob struct {
-	event eventbox.InboxEvent
+	event InboxEvent
 }
 
 func sendJob(ctx context.Context, jobs chan<- inboxWorkerJob, job inboxWorkerJob) bool {
@@ -133,7 +132,12 @@ func sendJob(ctx context.Context, jobs chan<- inboxWorkerJob, job inboxWorkerJob
 	}
 }
 
-func (w *InboxWorker) Route(eventType string, handler eventbox.InboxHandlerFunc) {
+// InboxHandlerFunc defines the function signature for handling an inbox event
+type InboxHandlerFunc func(ctx context.Context, msg kafka.Message) error
+
+// Route registers a handler function for a specific event type.
+// It panics if a handler for the same event type is already registered.
+func (w *InboxWorker) Route(eventType string, handler InboxHandlerFunc) {
 	if _, ok := w.route[eventType]; ok {
 		panic(fmt.Errorf("double handler for event type=%s", eventType))
 	}
@@ -229,7 +233,7 @@ func (w *InboxWorker) handleLoop(
 	for job := range jobs {
 		event := job.event
 
-		log := w.log.WithFields(logfields.FromInboxEvent(event))
+		log := w.log.WithInboxEvent(event)
 
 		herr := w.handleEvent(ctx, event)
 		switch {
@@ -242,8 +246,7 @@ func (w *InboxWorker) handleLoop(
 				break
 			}
 
-			log.WithError(herr).WithFields(logfields.FromInboxEvent(ev)).
-				Error("inbox event marked as failed due to max attempts reached")
+			log.WithInboxEvent(ev).WithError(herr).Error("inbox event marked as failed due to max attempts reached")
 		case herr != nil:
 			ev, err := w.box.DelayInboxEvent(ctx, w.id, event.EventID, herr.Error(), w.nextAttemptAt(event.Attempts+1))
 			if err != nil {
@@ -251,8 +254,7 @@ func (w *InboxWorker) handleLoop(
 				break
 			}
 
-			log.WithError(herr).WithFields(logfields.FromInboxEvent(ev)).
-				Warn("failed to mark inbox event as delayed ")
+			log.WithInboxEvent(ev).WithError(herr).Warn("failed to mark inbox event as delayed ")
 		default:
 			ev, err := w.box.CommitInboxEvent(ctx, w.id, event.EventID)
 			if err != nil {
@@ -260,8 +262,7 @@ func (w *InboxWorker) handleLoop(
 				break
 			}
 
-			log.WithFields(logfields.FromInboxEvent(ev)).
-				Debug("inbox event handled successfully")
+			log.WithInboxEvent(ev).Debug("inbox event handled successfully")
 		}
 
 		giveSlot(ctx, slots)
@@ -269,11 +270,10 @@ func (w *InboxWorker) handleLoop(
 }
 
 // handleEvent processes a single inbox event by looking up the appropriate handler based on the event type.
-func (w *InboxWorker) handleEvent(ctx context.Context, event eventbox.InboxEvent) error {
+func (w *InboxWorker) handleEvent(ctx context.Context, event InboxEvent) error {
 	handler, ok := w.route[event.Type]
 	if !ok {
-		w.log.WithFields(logfields.FromInboxEvent(event)).
-			Infof("no handler for event type=%s", event.Type)
+		w.log.WithInboxEvent(event).Warnf("no handler for event type=%s", event.Type)
 
 		return nil
 	}
@@ -295,6 +295,7 @@ func (w *InboxWorker) nextAttemptAt(attempts int32) time.Time {
 	return time.Now().UTC().Add(res)
 }
 
+// sleep pauses the execution of the worker for the configured sleep duration.
 func (w *InboxWorker) sleep(ctx context.Context) {
 	t := time.NewTimer(w.config.Sleep)
 	defer t.Stop()
@@ -307,7 +308,9 @@ func (w *InboxWorker) sleep(ctx context.Context) {
 	}
 }
 
-// Stop stops processing inbox events for the given process ID by cleaning up any events that are currently marked as processing for that worker.
+// Stop stops processing inbox events for the given process ID by cleaning up any events
+// that are currently marked as processing for that worker.
+// should be called which deffer after Run to ensure proper cleanup
 func (w *InboxWorker) Stop(ctx context.Context) {
 	if err := w.box.CleanProcessingInboxEvents(ctx, w.id); err != nil {
 		w.log.WithError(err).Error("failed to clean processing inbox events")

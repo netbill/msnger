@@ -17,9 +17,9 @@ func CleanupOutboxFailed(ctx context.Context, log *logium.Entry, url string) err
 	}
 	db := pgdbx.NewDB(pool)
 
-	OutboxCleaner := eventpg.NewOutboxCleaner(db)
+	OutboxCleaner := eventpg.NewOutbox(db)
 
-	err = OutboxCleaner.CleanOutboxFailed(ctx)
+	err = OutboxCleaner.CleanFailedOutboxEvents(ctx)
 	if err != nil {
 		log.WithError(err).Error("failed to clean Outbox failed")
 		return err
@@ -36,9 +36,9 @@ func CleanupOutboxProcessing(ctx context.Context, log *logium.Entry, url string,
 	}
 	db := pgdbx.NewDB(pool)
 
-	OutboxCleaner := eventpg.NewOutboxCleaner(db)
+	OutboxCleaner := eventpg.NewOutbox(db)
 
-	err = OutboxCleaner.CleanOutboxProcessing(ctx, processIDs...)
+	err = OutboxCleaner.CleanProcessingOutboxEvents(ctx, processIDs...)
 	if err != nil {
 		log.WithError(err).Error("failed to clean Outbox processing")
 		return err

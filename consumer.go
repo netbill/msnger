@@ -1,4 +1,4 @@
-package pg
+package eventbox
 
 import (
 	"context"
@@ -7,10 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/netbill/eventbox"
-	"github.com/netbill/eventbox/logfields"
-	"github.com/netbill/logium"
-	"github.com/netbill/pgdbx"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -28,15 +24,15 @@ type ConsumerConfig struct {
 	MaxBackoff time.Duration
 }
 
+// Consumer is responsible for consuming messages from Kafka, writing them to the inbox, and committing them.
 type Consumer struct {
-	log    *logium.Entry
-	inbox  inbox
-	topics map[string]eventbox.TopicConsumerConfig
+	log    Logger
+	inbox  Inbox
 	config ConsumerConfig
 }
 
-// NewConsumer creates a new Consumer with the given logger, inbox, and configuration.
-func NewConsumer(log *logium.Entry, db *pgdbx.DB, config ConsumerConfig) eventbox.Consumer {
+// NewConsumer creates a new Consumer instance with the provided logger, inbox, and configuration.
+func NewConsumer(log Logger, inbox Inbox, config ConsumerConfig) *Consumer {
 	if config.MinBackoff <= 0 {
 		config.MinBackoff = DefaultMinConsumerBackoff
 	}
@@ -49,60 +45,32 @@ func NewConsumer(log *logium.Entry, db *pgdbx.DB, config ConsumerConfig) eventbo
 
 	return &Consumer{
 		log:    log,
-		inbox:  inbox{db: db},
-		topics: make(map[string]eventbox.TopicConsumerConfig),
+		inbox:  inbox,
 		config: config,
 	}
 }
 
-func (c *Consumer) AddTopic(topic string, config eventbox.TopicConsumerConfig) {
-	_, ok := c.topics[topic]
-	if ok {
-		panic(fmt.Sprintf("topic %s already configured", topic))
-	}
-
-	if config.Instances <= 0 {
-		panic(fmt.Sprintf("instances %d must be greater than zero", config.Instances))
-	}
-
-	c.topics[topic] = config
-}
-
-// Run starts the consumer loop that reads messages from Kafka, writes them to the inbox, and commits them.
-func (c *Consumer) Run(ctx context.Context) {
+// Subscribe starts consuming messages from Kafka using the provided reader configuration and number of instances.
+func (c *Consumer) Subscribe(ctx context.Context, config kafka.ReaderConfig, instances int) {
 	var wg sync.WaitGroup
 
-	for topic, cfg := range c.topics {
-		topic := topic
-		cfg := cfg
+	for i := 0; i < instances; i++ {
+		reader := kafka.NewReader(config)
 
-		for i := 0; i < cfg.Instances; i++ {
-			reader := kafka.NewReader(kafka.ReaderConfig{
-				Topic:          topic,
-				Brokers:        cfg.Brokers,
-				GroupID:        cfg.GroupID,
-				QueueCapacity:  cfg.QueueCapacity,
-				MaxBytes:       cfg.MaxBytes,
-				MinBytes:       cfg.MinBytes,
-				MaxWait:        cfg.MaxWait,
-				CommitInterval: cfg.CommitInterval,
-				StartOffset:    cfg.CalculateStartOffset(),
-			})
-
-			wg.Add(1)
-			go func(r *kafka.Reader) {
-				defer wg.Done()
-				defer r.Close()
-				c.subscribe(ctx, r)
-			}(reader)
-		}
+		wg.Add(1)
+		go func(r *kafka.Reader) {
+			defer wg.Done()
+			defer r.Close()
+			c.consumeLoop(ctx, r)
+		}(reader)
 	}
 
-	<-ctx.Done()
 	wg.Wait()
 }
 
-func (c *Consumer) subscribe(ctx context.Context, reader *kafka.Reader) {
+// consumeLoop continuously fetches messages from the Kafka reader, writes them to the inbox, and commits them.
+// It implements an exponential backoff strategy for handling errors and respects context cancellation.
+func (c *Consumer) consumeLoop(ctx context.Context, reader *kafka.Reader) {
 	backoff := c.config.MinBackoff
 	for {
 		if ctx.Err() != nil {
@@ -137,7 +105,7 @@ func (c *Consumer) subscribe(ctx context.Context, reader *kafka.Reader) {
 // fetchMessage attempts to fetch a message from the Kafka reader.
 // It logs and returns an error if fetching fails.
 func (c *Consumer) fetchMessage(ctx context.Context, r *kafka.Reader) (kafka.Message, error) {
-	log := c.log.WithField(logfields.EventTopicFiled, r.Config().Topic)
+	log := c.log.WithTopic(r.Config().Topic)
 
 	m, err := r.FetchMessage(ctx)
 	switch {
@@ -147,7 +115,7 @@ func (c *Consumer) fetchMessage(ctx context.Context, r *kafka.Reader) (kafka.Mes
 		log.WithError(err).Errorf("failed to fetch message from Kafka")
 		return kafka.Message{}, fmt.Errorf("fetch message: %w", err)
 	default:
-		log.WithFields(logfields.FromMessage(m)).Debug("message fetched from Kafka")
+		log.WithMessage(m).Debug("message fetched from Kafka")
 		return m, nil
 	}
 }
@@ -155,14 +123,14 @@ func (c *Consumer) fetchMessage(ctx context.Context, r *kafka.Reader) (kafka.Mes
 // writeInbox attempts to write the fetched message to the inbox.
 // It handles the case where the inbox event already exists and logs appropriately.
 func (c *Consumer) writeInbox(ctx context.Context, m kafka.Message) error {
-	log := c.log.WithFields(logfields.FromMessage(m))
+	log := c.log.WithMessage(m)
 
 	_, err := c.inbox.WriteInboxEvent(ctx, m)
 	switch {
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case errors.Is(err, ErrInboxEventAlreadyExists):
-		log.Info("inbox event already exists")
+		log.WithError(err).Warnf("inbox event already exists, skipping")
 		return nil
 	case err != nil:
 		log.WithError(err).Errorf("failed to write inbox event")
@@ -176,7 +144,7 @@ func (c *Consumer) writeInbox(ctx context.Context, m kafka.Message) error {
 // commitMessage attempts to commit the processed message in Kafka.
 // It logs and returns an error if committing fails.
 func (c *Consumer) commitMessage(ctx context.Context, r *kafka.Reader, m kafka.Message) error {
-	log := c.log.WithFields(logfields.FromMessage(m))
+	log := c.log.WithMessage(m)
 
 	err := r.CommitMessages(ctx, m)
 	switch {

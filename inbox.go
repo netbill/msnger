@@ -2,6 +2,7 @@ package eventbox
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
@@ -21,6 +22,7 @@ const (
 	InboxEventStatusFailed = "failed"
 )
 
+// InboxEvent represents an event stored in the inbox for later processing by workers.
 type InboxEvent struct {
 	EventID uuid.UUID `json:"event_id"`
 	Seq     int64     `json:"seq"`
@@ -42,7 +44,7 @@ type InboxEvent struct {
 	LastAttemptAt *time.Time `json:"last_attempt_at"`
 	LastError     *string    `json:"last_error"`
 
-	ProcessedAt *time.Time `json:"processedAt"`
+	ProcessedAt *time.Time `json:"processed_at"`
 	ProducedAt  time.Time  `json:"produced_at"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
@@ -77,63 +79,65 @@ func (e *InboxEvent) ToKafkaMessage() kafka.Message {
 	}
 }
 
-// TopicConsumerConfig holds the configuration for the Consumer.
-type TopicConsumerConfig struct {
-	// Instances defines the number of consumer instances (Kafka readers)
-	// that will subscribe to the same topic within the same group.
-	Instances int
+var (
+	ErrInboxEventAlreadyExists = errors.New("inbox event with the same ID already exists")
+	ErrInboxEventNotFound      = errors.New("inbox event not found")
+)
 
-	//GroupID is the Kafka consumer group ID to use when subscribing to topics.
-	GroupID string
+type Inbox interface {
+	// WriteInboxEvent writes a new event to the inbox. It returns an error if an event with the same ID already exists.
+	WriteInboxEvent(
+		ctx context.Context,
+		message kafka.Message,
+	) (InboxEvent, error)
 
-	// Brokers is the list of Kafka broker addresses to connect to.
-	Brokers []string
+	// GetInboxEventByID retrieves an inbox event by its ID. It returns an error if the event is not found.
+	GetInboxEventByID(
+		ctx context.Context,
+		id uuid.UUID,
+	) (InboxEvent, error)
 
-	// MinBytes is the minimum number of bytes to fetch in a single request to Kafka.
-	MinBytes int
-	// MaxBytes is the maximum number of bytes to fetch in a single request to Kafka.
-	MaxBytes int
+	// ReserveInboxEvents reserves a batch of pending inbox events for processing by a worker.
+	// reserved events will have their status updated to "processing" and will be associated with the worker ID.
+	ReserveInboxEvents(
+		ctx context.Context,
+		workerID string,
+		limit int,
+	) ([]InboxEvent, error)
 
-	// MaxWait is the maximum amount of time to wait for new messages from Kafka before returning an empty batch.
-	MaxWait time.Duration
+	// CommitInboxEvent marks the specified inbox event as successfully processed by the worker.
+	// It updates the event's status to "processed" and records the processing time.
+	CommitInboxEvent(
+		ctx context.Context,
+		workerID string,
+		eventID uuid.UUID,
+	) (InboxEvent, error)
 
-	// CommitInterval is the interval at which to commit messages in Kafka.
-	CommitInterval time.Duration
+	// DelayInboxEvent marks the specified inbox event as failed and schedules it for a retry at the specified time.
+	// It updates the event's status to "pending", increments the attempt count, and records the reason for the delay.
+	DelayInboxEvent(
+		ctx context.Context,
+		workerID string,
+		eventID uuid.UUID,
+		reason string,
+		nextAttemptAt time.Time,
+	) (InboxEvent, error)
 
-	// StartOffset is the offset from which to start consuming messages in Kafka.
-	StartOffset string
+	// FailedInboxEvent marks the specified inbox event as failed after exhausting all retry attempts.
+	// It updates the event's status to "failed", increments the attempt count, and records the reason for the failure.
+	FailedInboxEvent(
+		ctx context.Context,
+		workerID string,
+		eventID uuid.UUID,
+		reason string,
+	) (InboxEvent, error)
 
-	// QueueCapacity is the capacity of the internal queue used by the Kafka reader.
-	QueueCapacity int
-}
+	// CleanProcessingInboxEvents releases any inbox events that are currently reserved by the specified worker IDs,
+	CleanProcessingInboxEvents(
+		ctx context.Context,
+		workerIDs ...string,
+	) error
 
-func (c *TopicConsumerConfig) CalculateStartOffset() int64 {
-	switch c.StartOffset {
-	case "", "last", "latest":
-		return kafka.LastOffset
-	case "first", "earliest":
-		return kafka.FirstOffset
-	default:
-		return kafka.LastOffset
-	}
-}
-
-type Consumer interface {
-	Run(ctx context.Context)
-	AddTopic(topic string, config TopicConsumerConfig)
-}
-
-type InboxHandlerFunc func(ctx context.Context, msg kafka.Message) error
-
-type InboxWorker interface {
-	Run(ctx context.Context)
-	Stop(ctx context.Context)
-
-	Route(eventType string, handler InboxHandlerFunc)
-}
-
-type InboxCleaner interface {
-	CleanInboxProcessing(ctx context.Context, processIDs ...string) error
-
-	CleanInboxFailed(ctx context.Context) error
+	// CleanFailedInboxEvents removes all inbox events that are marked as failed and have exhausted all retry attempts.
+	CleanFailedInboxEvents(ctx context.Context) error
 }

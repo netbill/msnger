@@ -12,7 +12,7 @@ const (
 	EventID      = "event_id"
 	EventType    = "event_type"
 	EventVersion = "event_version"
-	Producer     = "producer"
+	Producer     = "outbound"
 	ContentType  = "content_type"
 )
 
