@@ -22,12 +22,24 @@ func NewProducer() *Producer {
 }
 
 // AddTopic adds a Kafka writer for the specified topic.
-func (p *Producer) AddTopic(topic string, writer *kafka.Writer) {
-	if _, ok := p.writers[topic]; ok {
-		panic(fmt.Sprintf("writer for topic %s already exists", topic))
+func (p *Producer) AddTopic(topic string, w *kafka.Writer) error {
+	if w == nil {
+		return fmt.Errorf("nil writer for topic %s", topic)
 	}
-
-	p.writers[topic] = writer
+	if topic == "" {
+		return fmt.Errorf("empty topic")
+	}
+	if w.Topic != "" && w.Topic != topic {
+		return fmt.Errorf("writer topic mismatch: map=%q writer=%q", topic, w.Topic)
+	}
+	if _, ok := p.writers[topic]; ok {
+		return fmt.Errorf("writer for topic %s already exists", topic)
+	}
+	if w.Topic == "" {
+		w.Topic = topic
+	}
+	p.writers[topic] = w
+	return nil
 }
 
 type Event struct {
