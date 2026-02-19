@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -33,7 +32,6 @@ type TopicReaderConfig struct {
 type Consumer struct {
 	log    Logger
 	inbox  Inbox
-	topics []TopicReaderConfig
 	config ConsumerConfig
 }
 
@@ -56,65 +54,8 @@ func NewConsumer(log Logger, inbox Inbox, config ConsumerConfig) *Consumer {
 	}
 }
 
-func (c *Consumer) AddTopic(config TopicReaderConfig) error {
-	for _, existing := range c.topics {
-		if existing.Reader.Topic == config.Reader.Topic && existing.Reader.GroupID == config.Reader.GroupID {
-			return fmt.Errorf(
-				"topic %s with group %s already exists in consumer configuration",
-				config.Reader.Topic, config.Reader.GroupID,
-			)
-		}
-	}
-
-	if config.Instances <= 0 {
-		return fmt.Errorf("instances must be greater than 0 for topic %s", config.Reader.Topic)
-	}
-
-	if config.Reader.Topic == "" {
-		return fmt.Errorf("topic name cannot be empty")
-	}
-
-	if config.Reader.GroupID == "" {
-		return fmt.Errorf("group ID cannot be empty for topic %s", config.Reader.Topic)
-	}
-
-	if len(config.Reader.Brokers) == 0 {
-		return fmt.Errorf("brokers cannot be empty for topic %s", config.Reader.Topic)
-	}
-
-	c.topics = append(c.topics, TopicReaderConfig{
-		Instances: config.Instances,
-		Reader:    config.Reader,
-	})
-
-	return nil
-}
-
-// Run starts the consumer to consume messages from Kafka for all configured topics.
-func (c *Consumer) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-
-	for _, cfg := range c.topics {
-		cfg := cfg
-		for i := 0; i < cfg.Instances; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
-				reader := kafka.NewReader(cfg.Reader)
-				defer reader.Close()
-
-				c.consumeLoop(ctx, reader)
-			}()
-		}
-	}
-
-	wg.Wait()
-}
-
-// consumeLoop continuously fetches messages from the Kafka reader, writes them to the inbox, and commits them.
-// It implements an exponential backoff strategy for handling errors and respects context cancellation.
-func (c *Consumer) consumeLoop(ctx context.Context, reader *kafka.Reader) {
+// Subscribe starts the consumer to consume messages from Kafka for all configured topics.
+func (c *Consumer) Subscribe(ctx context.Context, reader *kafka.Reader) {
 	backoff := c.config.MinBackoff
 	for {
 		if ctx.Err() != nil {
