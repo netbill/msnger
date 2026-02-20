@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/netbill/logium"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -23,20 +24,15 @@ type ConsumerConfig struct {
 	MaxBackoff time.Duration
 }
 
-type TopicReaderConfig struct {
-	Instances int
-	Reader    kafka.ReaderConfig
-}
-
 // Consumer is responsible for consuming messages from Kafka, writing them to the inbox, and committing them.
 type Consumer struct {
-	log    Logger
+	log    *Logger
 	inbox  Inbox
 	config ConsumerConfig
 }
 
 // NewConsumer creates a new Consumer instance with the provided logger, inbox, and configuration.
-func NewConsumer(log Logger, inbox Inbox, config ConsumerConfig) *Consumer {
+func NewConsumer(log logium.Logger, inbox Inbox, config ConsumerConfig) *Consumer {
 	if config.MinBackoff <= 0 {
 		config.MinBackoff = DefaultMinConsumerBackoff
 	}
@@ -48,7 +44,7 @@ func NewConsumer(log Logger, inbox Inbox, config ConsumerConfig) *Consumer {
 	}
 
 	return &Consumer{
-		log:    log,
+		log:    NewLogger(log),
 		inbox:  inbox,
 		config: config,
 	}
@@ -97,7 +93,7 @@ func (c *Consumer) fetchMessage(ctx context.Context, r *kafka.Reader) (kafka.Mes
 	case ctx.Err() != nil:
 		return kafka.Message{}, ctx.Err()
 	case err != nil:
-		log.WithError(err).Errorf("failed to fetch message from Kafka")
+		log.WithError(err).Error("failed to fetch message from Kafka")
 		return kafka.Message{}, fmt.Errorf("fetch message: %w", err)
 	default:
 		log.WithMessage(m).Debug("message fetched from Kafka")
@@ -115,10 +111,10 @@ func (c *Consumer) writeInbox(ctx context.Context, m kafka.Message) error {
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case errors.Is(err, ErrInboxEventAlreadyExists):
-		log.WithError(err).Warnf("inbox event already exists, skipping")
+		log.WithError(err).Warn("inbox event already exists, skipping")
 		return nil
 	case err != nil:
-		log.WithError(err).Errorf("failed to write inbox event")
+		log.WithError(err).Error("failed to write inbox event")
 		return fmt.Errorf("write inbox event: %w", err)
 	default:
 		log.Debug("inbox event written successfully")
@@ -136,7 +132,7 @@ func (c *Consumer) commitMessage(ctx context.Context, r *kafka.Reader, m kafka.M
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case err != nil:
-		log.WithError(err).Errorf("failed to commit message in Kafka")
+		log.WithError(err).Error("failed to commit message in Kafka")
 		return fmt.Errorf("commit message: %w", err)
 	default:
 		log.Debug("message committed in Kafka successfully")

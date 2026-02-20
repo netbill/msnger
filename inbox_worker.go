@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/netbill/logium"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -54,7 +55,7 @@ type InboxWorkerConfig struct {
 // handling them using registered handlers, and updating their status based on the processing outcome.
 type InboxWorker struct {
 	id  string
-	log Logger
+	log *Logger
 
 	box    Inbox
 	route  map[string]InboxHandlerFunc
@@ -64,7 +65,7 @@ type InboxWorker struct {
 // NewInboxWorker creates a new InboxWorker.
 func NewInboxWorker(
 	id string,
-	log Logger,
+	logger logium.Logger,
 	box Inbox,
 	config InboxWorkerConfig,
 ) *InboxWorker {
@@ -92,7 +93,7 @@ func NewInboxWorker(
 
 	return &InboxWorker{
 		id:     id,
-		log:    log.WithField("worker_id", id),
+		log:    NewLogger(logger).WithField("worker_id", id),
 		box:    box,
 		config: config,
 		route:  make(map[string]InboxHandlerFunc),
@@ -273,8 +274,7 @@ func (w *InboxWorker) handleLoop(
 func (w *InboxWorker) handleEvent(ctx context.Context, event InboxEvent) error {
 	handler, ok := w.route[event.Type]
 	if !ok {
-		w.log.WithInboxEvent(event).Warnf("no handler for event type=%s", event.Type)
-
+		w.log.WithInboxEvent(event).Warn("no handler for event type")
 		return nil
 	}
 

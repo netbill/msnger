@@ -55,26 +55,11 @@ func (e *InboxEvent) ToKafkaMessage() kafka.Message {
 		Key:   []byte(e.Key),
 		Value: e.Payload,
 		Headers: []kafka.Header{
-			{
-				Key:   headers.EventID,
-				Value: []byte(e.EventID.String()),
-			},
-			{
-				Key:   headers.EventType,
-				Value: []byte(e.Type),
-			},
-			{
-				Key:   headers.EventVersion,
-				Value: []byte(strconv.FormatInt(int64(e.Version), 10)),
-			},
-			{
-				Key:   headers.Producer,
-				Value: []byte(e.Producer),
-			},
-			{
-				Key:   headers.ContentType,
-				Value: []byte("application/json"),
-			},
+			{Key: headers.EventID, Value: []byte(e.EventID.String())},
+			{Key: headers.EventType, Value: []byte(e.Type)},
+			{Key: headers.EventVersion, Value: []byte(strconv.FormatInt(int64(e.Version), 10))},
+			{Key: headers.Producer, Value: []byte(e.Producer)},
+			{Key: headers.ContentType, Value: []byte("application/json")},
 		},
 	}
 }

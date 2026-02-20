@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/netbill/logium"
 )
 
 const (
@@ -53,19 +54,19 @@ type OutboxWorkerConfig struct {
 // by reserving events from the outbox,
 type OutboxWorker struct {
 	id  string
-	log Logger
+	log *Logger
 
 	box      Outbox
-	producer Producer
+	producer *Producer
 	config   OutboxWorkerConfig
 }
 
 // NewOutboxWorker creates a new OutboxWorker instance with the provided logger, outbox repository, producer, and configuration.
 func NewOutboxWorker(
 	id string,
-	log Logger,
+	logger logium.Logger,
 	repo Outbox,
-	producer Producer,
+	producer *Producer,
 	config OutboxWorkerConfig,
 ) *OutboxWorker {
 	if config.Routines <= 0 {
@@ -95,7 +96,7 @@ func NewOutboxWorker(
 
 	return &OutboxWorker{
 		id:       id,
-		log:      log.WithField("worker_id", id),
+		log:      NewLogger(logger).WithField("worker_id", id),
 		box:      repo,
 		producer: producer,
 		config:   config,
