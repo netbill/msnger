@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/netbill/logium"
-	"github.com/segmentio/kafka-go"
 )
 
 const (
@@ -134,7 +133,7 @@ func sendJob(ctx context.Context, jobs chan<- inboxWorkerJob, job inboxWorkerJob
 }
 
 // InboxHandlerFunc defines the function signature for handling an inbox event
-type InboxHandlerFunc func(ctx context.Context, msg kafka.Message) error
+type InboxHandlerFunc func(ctx context.Context, event InboxEvent) error
 
 // Route registers a handler function for a specific event type.
 // It panics if a handler for the same event type is already registered.
@@ -278,7 +277,7 @@ func (w *InboxWorker) handleEvent(ctx context.Context, event InboxEvent) error {
 		return nil
 	}
 
-	return handler(ctx, event.ToKafkaMessage())
+	return handler(ctx, event)
 }
 
 // nextAttemptAt calculates the next attempt time for processing a failed event based on the number of attempts

@@ -4,43 +4,141 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/netbill/eventbox/headers"
 	"github.com/segmentio/kafka-go"
 )
 
+type WriterTopicConfig struct {
+	Balancer string
+
+	MaxAttempts int
+
+	WriteBackoffMin time.Duration
+	WriteBackoffMax time.Duration
+
+	BatchSize    int
+	BatchBytes   int64
+	BatchTimeout time.Duration
+
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+
+	RequiredAcks string
+
+	Async bool
+
+	Compression string
+}
+
+func parseRequiredAcks(v string) (kafka.RequiredAcks, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "all", "-1":
+		return kafka.RequireAll, nil
+	case "none", "0":
+		return kafka.RequireNone, nil
+	case "one", "1":
+		return kafka.RequireOne, nil
+	default:
+		return 0, fmt.Errorf("invalid required_acks: %q", v)
+	}
+}
+
+func parseBalancer(v string) (kafka.Balancer, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "hash":
+		return &kafka.Hash{}, nil
+	case "leastbytes", "least_bytes":
+		return &kafka.LeastBytes{}, nil
+	case "roundrobin", "round_robin":
+		return &kafka.RoundRobin{}, nil
+	default:
+		return nil, fmt.Errorf("invalid balancer: %q", v)
+	}
+}
+
+func parseCompression(v string) (kafka.Compression, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "none":
+		return kafka.Snappy, nil
+	case "gzip":
+		return kafka.Gzip, nil
+	case "snappy":
+		return kafka.Snappy, nil
+	case "lz4":
+		return kafka.Lz4, nil
+	case "zstd":
+		return kafka.Zstd, nil
+	default:
+		return 0, fmt.Errorf("invalid compression: %q", v)
+	}
+}
+
 type Producer struct {
+	addr    net.Addr
 	writers map[string]*kafka.Writer
 }
 
-func NewProducer() *Producer {
+func NewProducer(addr ...string) *Producer {
 	return &Producer{
+		addr:    kafka.TCP(addr...),
 		writers: make(map[string]*kafka.Writer),
 	}
 }
 
-// AddTopic adds a Kafka writer for the specified topic.
-func (p *Producer) AddTopic(w *kafka.Writer) error {
-	if w == nil {
-		return fmt.Errorf("nil writer for topic")
-	}
-	if w.Topic == "" {
-		return fmt.Errorf("empty topic for writer") // Kafka writer must have a topic specified
-	}
-	if w.Addr == nil {
-		return fmt.Errorf("nil address for writer of topic %s", w.Topic)
-	}
-	if _, ok := p.writers[w.Topic]; ok {
-		return fmt.Errorf("writer for topic %s already exists", w.Topic)
+func (p *Producer) AddWriter(topic string, cfg WriterTopicConfig) error {
+	if topic == "" {
+		return fmt.Errorf("empty topic for writer")
 	}
 
-	p.writers[w.Topic] = w
+	if _, ok := p.writers[topic]; ok {
+		return fmt.Errorf("writer for topic %s already exists", topic)
+	}
+
+	requiredAcks, err := parseRequiredAcks(cfg.RequiredAcks)
+	if err != nil {
+		return fmt.Errorf("failed to parse required_acks for topic %s: %w", topic, err)
+	}
+
+	balancer, err := parseBalancer(cfg.Balancer)
+	if err != nil {
+		return fmt.Errorf("failed to parse balancer for topic %s: %w", topic, err)
+	}
+
+	compression, err := parseCompression(cfg.Compression)
+	if err != nil {
+		return fmt.Errorf("failed to parse compression for topic %s: %w", topic, err)
+	}
+
+	p.writers[topic] = &kafka.Writer{
+		Addr:         p.addr,
+		Topic:        topic,
+		Balancer:     balancer,
+		RequiredAcks: requiredAcks,
+		Async:        cfg.Async,
+		Compression:  compression,
+
+		MaxAttempts:     cfg.MaxAttempts,
+		WriteBackoffMin: cfg.WriteBackoffMin,
+		WriteBackoffMax: cfg.WriteBackoffMax,
+
+		BatchSize:    cfg.BatchSize,
+		BatchBytes:   cfg.BatchBytes,
+		BatchTimeout: cfg.BatchTimeout,
+
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+	}
+
 	return nil
 }
 
-type Event struct {
+type Message struct {
 	ID       uuid.UUID `json:"event_id"`
 	Type     string    `json:"type"`
 	Version  int32     `json:"version"`
@@ -50,19 +148,13 @@ type Event struct {
 	Payload  []byte    `json:"payload"`
 }
 
-// WriteToKafka writes the message directly to Kafka.
-// It should be used when the message is not critical and can be lost in case of failure.
-func (p *Producer) WriteToKafka(
-	ctx context.Context,
-	msg Event,
-) error {
+func (p *Producer) WriteToKafka(ctx context.Context, msg Message) error {
 	writer, ok := p.writers[msg.Topic]
 	if !ok {
 		return fmt.Errorf("no writer for topic %s", msg.Topic)
 	}
 
 	err := writer.WriteMessages(ctx, kafka.Message{
-		Topic: msg.Topic,
 		Key:   []byte(msg.Key),
 		Value: msg.Payload,
 		Headers: []kafka.Header{

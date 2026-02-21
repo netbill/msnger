@@ -31,7 +31,7 @@ func (b *Outbox) queries() *sqlc.Queries {
 // If an event with the same ID already exists, it returns an error.
 func (b *Outbox) WriteOutboxEvent(
 	ctx context.Context,
-	event eventbox.Event,
+	event eventbox.Message,
 ) (eventbox.OutboxEvent, error) {
 	row, err := b.queries().InsertOutboxEvent(ctx, sqlc.InsertOutboxEventParams{
 		EventID: pgtype.UUID{Bytes: event.ID, Valid: true},

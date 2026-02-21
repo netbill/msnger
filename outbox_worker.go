@@ -188,9 +188,7 @@ func (p *OutboxWorker) sendLoop(
 	for job := range jobs {
 		event := job.event
 
-		entry := p.log.WithOutboxEvent(event)
-
-		err := p.producer.WriteToKafka(ctx, Event{
+		err := p.producer.WriteToKafka(ctx, Message{
 			ID:       event.EventID,
 			Topic:    event.Topic,
 			Key:      event.Key,
@@ -200,7 +198,7 @@ func (p *OutboxWorker) sendLoop(
 			Payload:  event.Payload,
 		})
 		if err != nil {
-			entry.WithError(err).Error("failed to send outbox event")
+			p.log.WithOutboxEvent(event).WithError(err).Error("failed to send outbox event")
 
 			_ = sendOutboxResult(ctx, results, producerRes{
 				event:       event,
@@ -208,7 +206,7 @@ func (p *OutboxWorker) sendLoop(
 				processedAt: time.Now().UTC(),
 			})
 		} else {
-			entry.Debug("outbox event sent successfully")
+			p.log.WithOutboxEvent(event).Debug("outbox event sent successfully")
 
 			_ = sendOutboxResult(ctx, results, producerRes{
 				event:       event,
@@ -254,8 +252,6 @@ func (p *OutboxWorker) processBatch(
 			return 0
 		}
 
-		entry := p.log.WithOutboxEvent(r.event)
-
 		if r.err != nil {
 			if p.config.MaxAttempts != 0 && r.event.Attempts+1 >= p.config.MaxAttempts {
 				failed[r.event.EventID] = FailedOutboxEventData{
@@ -263,7 +259,8 @@ func (p *OutboxWorker) processBatch(
 					Reason:        r.err.Error(),
 				}
 
-				entry.Error("event marked as failed after reaching max attempts")
+				p.log.WithOutboxEvent(r.event).
+					Error("event marked as failed after reaching max attempts")
 				continue
 			} else {
 				pending[r.event.EventID] = DelayOutboxEventData{
@@ -272,7 +269,8 @@ func (p *OutboxWorker) processBatch(
 					Reason:        r.err.Error(),
 				}
 
-				entry.Warn("event will be delayed for future processing after failed attempt")
+				p.log.WithOutboxEvent(r.event).
+					Warn("event will be delayed for future processing after failed attempt")
 				continue
 			}
 		}

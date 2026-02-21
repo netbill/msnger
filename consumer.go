@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/netbill/logium"
@@ -24,11 +25,23 @@ type ConsumerConfig struct {
 	MaxBackoff time.Duration
 }
 
+// ReaderConfig defines the configuration for the Kafka reader used by the Consumer.
+type ReaderConfig struct {
+	Brokers   []string
+	GroupID   string
+	Topic     string
+	Instances int
+
+	MinBytes int
+	MaxBytes int
+}
+
 // Consumer is responsible for consuming messages from Kafka, writing them to the inbox, and committing them.
 type Consumer struct {
-	log    *Logger
-	inbox  Inbox
-	config ConsumerConfig
+	log     *Logger
+	inbox   Inbox
+	config  ConsumerConfig
+	readers []*kafka.Reader
 }
 
 // NewConsumer creates a new Consumer instance with the provided logger, inbox, and configuration.
@@ -50,9 +63,40 @@ func NewConsumer(log logium.Logger, inbox Inbox, config ConsumerConfig) *Consume
 	}
 }
 
-// Subscribe starts the consumer to consume messages from Kafka for all configured topics.
-func (c *Consumer) Subscribe(ctx context.Context, reader *kafka.Reader) {
+func (c *Consumer) AddReader(cfg ReaderConfig, instances int) {
+	if instances <= 0 {
+		instances = 1
+	}
+
+	for i := 0; i < instances; i++ {
+		r := kafka.NewReader(kafka.ReaderConfig{
+			Brokers:  cfg.Brokers,
+			GroupID:  cfg.GroupID,
+			Topic:    cfg.Topic,
+			MinBytes: cfg.MinBytes,
+			MaxBytes: cfg.MaxBytes,
+		})
+		c.readers = append(c.readers, r)
+	}
+}
+
+func (c *Consumer) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for _, r := range c.readers {
+		wg.Add(1)
+		go func(reader *kafka.Reader) {
+			defer wg.Done()
+			c.subscribe(ctx, reader)
+		}(r)
+	}
+
+	wg.Wait()
+}
+
+// subscribe starts the consumer to consume messages from Kafka for all configured topics.
+func (c *Consumer) subscribe(ctx context.Context, reader *kafka.Reader) {
 	backoff := c.config.MinBackoff
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -159,4 +203,19 @@ func (c *Consumer) backoffOrStop(ctx context.Context, backoff *time.Duration) bo
 	}
 	*backoff = next
 	return true
+}
+
+func (c *Consumer) Close() error {
+	var errs []error
+	for _, r := range c.readers {
+		if err := r.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close reader for topic %s: %w", r.Config().Topic, err))
+		}
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+
+	return errors.Join(errs...)
 }

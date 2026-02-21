@@ -85,7 +85,7 @@ type Outbox interface {
 	// WriteOutboxEvent writes a new event to the outbox. It returns an error if an event with the same ID already exists.
 	WriteOutboxEvent(
 		ctx context.Context,
-		message Event,
+		message Message,
 	) (OutboxEvent, error)
 
 	// GetOutboxEventByID retrieves an outbox event by its ID. It returns an error if the event is not found.
