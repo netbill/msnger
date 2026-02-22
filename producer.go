@@ -14,6 +14,7 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+// WriterTopicConfig defines the configuration for a Kafka writer associated with a specific topic.
 type WriterTopicConfig struct {
 	Balancer string
 
@@ -79,11 +80,13 @@ func parseCompression(v string) (kafka.Compression, error) {
 	}
 }
 
+// Producer is responsible for sending messages to Kafka topics using configured writers.
 type Producer struct {
 	addr    net.Addr
 	writers map[string]*kafka.Writer
 }
 
+// NewProducer creates a new Producer instance with the given Kafka broker addresses.
 func NewProducer(addr ...string) *Producer {
 	return &Producer{
 		addr:    kafka.TCP(addr...),
@@ -91,6 +94,7 @@ func NewProducer(addr ...string) *Producer {
 	}
 }
 
+// AddWriter adds a new Kafka writer for the specified topic with the given configuration.
 func (p *Producer) AddWriter(topic string, cfg WriterTopicConfig) error {
 	if topic == "" {
 		return fmt.Errorf("empty topic for writer")
@@ -138,6 +142,7 @@ func (p *Producer) AddWriter(topic string, cfg WriterTopicConfig) error {
 	return nil
 }
 
+// Message represents an event message to be sent to Kafka.
 type Message struct {
 	ID       uuid.UUID `json:"event_id"`
 	Type     string    `json:"type"`
@@ -148,6 +153,7 @@ type Message struct {
 	Payload  []byte    `json:"payload"`
 }
 
+// WriteToKafka writes the given message to the appropriate Kafka topic using the configured writer.
 func (p *Producer) WriteToKafka(ctx context.Context, msg Message) error {
 	writer, ok := p.writers[msg.Topic]
 	if !ok {
@@ -172,6 +178,7 @@ func (p *Producer) WriteToKafka(ctx context.Context, msg Message) error {
 	return nil
 }
 
+// Close closes all Kafka writers managed by the producer.
 func (p *Producer) Close() error {
 	var errs []error
 

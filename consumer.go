@@ -32,8 +32,10 @@ type ReaderConfig struct {
 	Topic     string
 	Instances int
 
-	MinBytes int
-	MaxBytes int
+	MaxWait       time.Duration
+	QueueCapacity int
+	MinBytes      int
+	MaxBytes      int
 }
 
 // Consumer is responsible for consuming messages from Kafka, writing them to the inbox, and committing them.
@@ -63,18 +65,16 @@ func NewConsumer(log logium.Logger, inbox Inbox, config ConsumerConfig) *Consume
 	}
 }
 
-func (c *Consumer) AddReader(cfg ReaderConfig, instances int) {
-	if instances <= 0 {
-		instances = 1
-	}
-
-	for i := 0; i < instances; i++ {
+func (c *Consumer) AddReader(cfg ReaderConfig) {
+	for i := 0; i < cfg.Instances; i++ {
 		r := kafka.NewReader(kafka.ReaderConfig{
-			Brokers:  cfg.Brokers,
-			GroupID:  cfg.GroupID,
-			Topic:    cfg.Topic,
-			MinBytes: cfg.MinBytes,
-			MaxBytes: cfg.MaxBytes,
+			Brokers:       cfg.Brokers,
+			GroupID:       cfg.GroupID,
+			Topic:         cfg.Topic,
+			MaxWait:       cfg.MaxWait,
+			QueueCapacity: cfg.QueueCapacity,
+			MinBytes:      cfg.MinBytes,
+			MaxBytes:      cfg.MaxBytes,
 		})
 		c.readers = append(c.readers, r)
 	}
@@ -130,17 +130,15 @@ func (c *Consumer) subscribe(ctx context.Context, reader *kafka.Reader) {
 // fetchMessage attempts to fetch a message from the Kafka reader.
 // It logs and returns an error if fetching fails.
 func (c *Consumer) fetchMessage(ctx context.Context, r *kafka.Reader) (kafka.Message, error) {
-	log := c.log.WithTopic(r.Config().Topic)
-
 	m, err := r.FetchMessage(ctx)
 	switch {
 	case ctx.Err() != nil:
 		return kafka.Message{}, ctx.Err()
 	case err != nil:
-		log.WithError(err).Error("failed to fetch message from Kafka")
+		c.log.WithTopic(r.Config().Topic).WithError(err).Error("failed to fetch message from Kafka")
 		return kafka.Message{}, fmt.Errorf("fetch message: %w", err)
 	default:
-		log.WithMessage(m).Debug("message fetched from Kafka")
+		c.log.WithTopic(r.Config().Topic).WithMessage(m).Debug("message fetched from Kafka")
 		return m, nil
 	}
 }
@@ -148,20 +146,18 @@ func (c *Consumer) fetchMessage(ctx context.Context, r *kafka.Reader) (kafka.Mes
 // writeInbox attempts to write the fetched message to the inbox.
 // It handles the case where the inbox event already exists and logs appropriately.
 func (c *Consumer) writeInbox(ctx context.Context, m kafka.Message) error {
-	log := c.log.WithMessage(m)
-
 	_, err := c.inbox.WriteInboxEvent(ctx, m)
 	switch {
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case errors.Is(err, ErrInboxEventAlreadyExists):
-		log.WithError(err).Warn("inbox event already exists, skipping")
+		c.log.WithMessage(m).WithError(err).Info("inbox event already exists, skipping")
 		return nil
 	case err != nil:
-		log.WithError(err).Error("failed to write inbox event")
+		c.log.WithMessage(m).WithError(err).Error("failed to write inbox event")
 		return fmt.Errorf("write inbox event: %w", err)
 	default:
-		log.Debug("inbox event written successfully")
+		c.log.WithMessage(m).Debug("inbox event written successfully")
 		return nil
 	}
 }
@@ -169,17 +165,15 @@ func (c *Consumer) writeInbox(ctx context.Context, m kafka.Message) error {
 // commitMessage attempts to commit the processed message in Kafka.
 // It logs and returns an error if committing fails.
 func (c *Consumer) commitMessage(ctx context.Context, r *kafka.Reader, m kafka.Message) error {
-	log := c.log.WithMessage(m)
-
 	err := r.CommitMessages(ctx, m)
 	switch {
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case err != nil:
-		log.WithError(err).Error("failed to commit message in Kafka")
+		c.log.WithMessage(m).WithError(err).Error("failed to commit message in Kafka")
 		return fmt.Errorf("commit message: %w", err)
 	default:
-		log.Debug("message committed in Kafka successfully")
+		c.log.WithMessage(m).Debug("message committed in Kafka successfully")
 		return nil
 	}
 }
@@ -205,17 +199,33 @@ func (c *Consumer) backoffOrStop(ctx context.Context, backoff *time.Duration) bo
 	return true
 }
 
+// Close gracefully shuts down the consumer by closing all Kafka readers.
 func (c *Consumer) Close() error {
-	var errs []error
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []error
+	)
+
 	for _, r := range c.readers {
-		if err := r.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close reader for topic %s: %w", r.Config().Topic, err))
-		}
+		wg.Add(1)
+		go func(rr *kafka.Reader) {
+			defer wg.Done()
+			if err := rr.Close(); err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("close reader for topic %s: %w", rr.Config().Topic, err))
+				mu.Unlock()
+			}
+		}(r)
 	}
 
+	wg.Wait()
+
 	if len(errs) == 0 {
+		c.log.Info("kafka consumer closed successfully")
 		return nil
 	}
 
+	c.log.WithError(errors.Join(errs...)).Error("failed to close kafka consumer")
 	return errors.Join(errs...)
 }

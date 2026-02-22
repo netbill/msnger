@@ -233,8 +233,6 @@ func (w *InboxWorker) handleLoop(
 	for job := range jobs {
 		event := job.event
 
-		log := w.log.WithInboxEvent(event)
-
 		herr := w.handleEvent(ctx, event)
 		switch {
 		case ctx.Err() != nil:
@@ -242,27 +240,27 @@ func (w *InboxWorker) handleLoop(
 		case herr != nil && event.Attempts+1 >= w.config.MaxAttempts && w.config.MaxAttempts != 0:
 			ev, err := w.box.FailedInboxEvent(ctx, w.id, event.EventID, herr.Error())
 			if err != nil {
-				log.WithError(err).Error("failed to mark inbox event as failed")
+				w.log.WithInboxEvent(event).WithError(err).Error("failed to mark inbox event as failed")
 				break
 			}
 
-			log.WithInboxEvent(ev).WithError(herr).Error("inbox event marked as failed due to max attempts reached")
+			w.log.WithInboxEvent(ev).WithError(herr).Error("inbox event marked as failed due to max attempts reached")
 		case herr != nil:
 			ev, err := w.box.DelayInboxEvent(ctx, w.id, event.EventID, herr.Error(), w.nextAttemptAt(event.Attempts+1))
 			if err != nil {
-				log.WithError(err).Error("failed to delay inbox event")
+				w.log.WithInboxEvent(event).WithError(err).Error("failed to delay inbox event")
 				break
 			}
 
-			log.WithInboxEvent(ev).WithError(herr).Warn("failed to mark inbox event as delayed ")
+			w.log.WithInboxEvent(ev).WithError(herr).Warn("failed to mark inbox event as delayed ")
 		default:
 			ev, err := w.box.CommitInboxEvent(ctx, w.id, event.EventID)
 			if err != nil {
-				log.WithError(err).Error("failed to commit inbox event")
+				w.log.WithInboxEvent(event).WithError(err).Error("failed to commit inbox event")
 				break
 			}
 
-			log.WithInboxEvent(ev).Debug("inbox event handled successfully")
+			w.log.WithInboxEvent(ev).Debug("inbox event handled successfully")
 		}
 
 		giveSlot(ctx, slots)
@@ -307,11 +305,11 @@ func (w *InboxWorker) sleep(ctx context.Context) {
 	}
 }
 
-// Stop stops processing inbox events for the given process ID by cleaning up any events
+// Clean stops processing inbox events for the given process ID by cleaning up any events
 // that are currently marked as processing for that worker.
 // should be called which deffer after Run to ensure proper cleanup
-func (w *InboxWorker) Stop(ctx context.Context) {
-	if err := w.box.CleanProcessingInboxEvents(ctx, w.id); err != nil {
+func (w *InboxWorker) Clean() {
+	if err := w.box.CleanProcessingInboxEvents(context.Background(), w.id); err != nil {
 		w.log.WithError(err).Error("failed to clean processing inbox events")
 	}
 

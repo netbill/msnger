@@ -62,6 +62,7 @@ func (e *OutboxEvent) ToKafkaMessage() kafka.Message {
 }
 
 var (
+	// ErrOutboxEventAlreadyExists TODO maybe its useless
 	ErrOutboxEventAlreadyExists = errors.New("outbox event with the same ID already exists")
 	ErrOutboxEventNotFound      = errors.New("outbox event not found")
 )

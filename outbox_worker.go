@@ -262,17 +262,17 @@ func (p *OutboxWorker) processBatch(
 				p.log.WithOutboxEvent(r.event).
 					Error("event marked as failed after reaching max attempts")
 				continue
-			} else {
-				pending[r.event.EventID] = DelayOutboxEventData{
-					LastAttemptAt: r.processedAt,
-					NextAttemptAt: p.nextAttemptAt(r.event.Attempts + 1),
-					Reason:        r.err.Error(),
-				}
-
-				p.log.WithOutboxEvent(r.event).
-					Warn("event will be delayed for future processing after failed attempt")
-				continue
 			}
+
+			pending[r.event.EventID] = DelayOutboxEventData{
+				LastAttemptAt: r.processedAt,
+				NextAttemptAt: p.nextAttemptAt(r.event.Attempts + 1),
+				Reason:        r.err.Error(),
+			}
+
+			p.log.WithOutboxEvent(r.event).
+				Warn("event will be delayed for future processing after failed attempt")
+			continue
 		}
 
 		commit[r.event.EventID] = CommitOutboxEventParams{SentAt: r.processedAt}
@@ -332,10 +332,10 @@ func (p *OutboxWorker) sleep(ctx context.Context) {
 	}
 }
 
-// Stop gracefully stops the outbox worker by cleaning up any events that are currently reserved for processing by this worker.
+// Clean gracefully stops the outbox worker by cleaning up any events that are currently reserved for processing by this worker.
 // should be called which deffer after Run to ensure proper cleanup
-func (p *OutboxWorker) Stop(ctx context.Context) {
-	if err := p.box.CleanProcessingOutboxEvents(ctx, p.id); err != nil {
+func (p *OutboxWorker) Clean() {
+	if err := p.box.CleanProcessingOutboxEvents(context.Background(), p.id); err != nil {
 		p.log.WithError(err).Error("failed to clean processing events for worker")
 	}
 
