@@ -311,6 +311,7 @@ func (w *InboxWorker) sleep(ctx context.Context) {
 func (w *InboxWorker) Clean() {
 	if err := w.box.CleanProcessingInboxEvents(context.Background(), w.id); err != nil {
 		w.log.WithError(err).Error("failed to clean processing inbox events")
+		return
 	}
 
 	w.log.Info("inbox worker stopped successfully")

@@ -221,11 +221,11 @@ func (c *Consumer) Close() error {
 
 	wg.Wait()
 
-	if len(errs) == 0 {
-		c.log.Info("kafka consumer closed successfully")
-		return nil
+	if len(errs) != 0 {
+		c.log.WithError(errors.Join(errs...)).Error("failed to close kafka consumer")
+		return errors.Join(errs...)
 	}
 
-	c.log.WithError(errors.Join(errs...)).Error("failed to close kafka consumer")
-	return errors.Join(errs...)
+	c.log.Info("kafka consumer closed successfully")
+	return nil
 }

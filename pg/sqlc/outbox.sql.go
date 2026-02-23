@@ -234,6 +234,7 @@ WITH inp AS (
 )
 UPDATE outbox_events e
 SET status          = 'sent',
+    attempts        = e.attempts + 1,
     sent_at         = inp.sent_at,
     last_attempt_at = inp.sent_at,
     reserved_by     = NULL

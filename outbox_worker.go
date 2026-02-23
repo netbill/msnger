@@ -199,21 +199,21 @@ func (p *OutboxWorker) sendLoop(
 		})
 		if err != nil {
 			p.log.WithOutboxEvent(event).WithError(err).Error("failed to send outbox event")
-
 			_ = sendOutboxResult(ctx, results, producerRes{
 				event:       event,
 				err:         err,
 				processedAt: time.Now().UTC(),
 			})
-		} else {
-			p.log.WithOutboxEvent(event).Debug("outbox event sent successfully")
 
-			_ = sendOutboxResult(ctx, results, producerRes{
-				event:       event,
-				err:         nil,
-				processedAt: time.Now().UTC(),
-			})
+			continue
 		}
+
+		p.log.WithOutboxEvent(event).Debug("outbox event sent successfully")
+		_ = sendOutboxResult(ctx, results, producerRes{
+			event:       event,
+			err:         nil,
+			processedAt: time.Now().UTC(),
+		})
 	}
 }
 
@@ -336,7 +336,8 @@ func (p *OutboxWorker) sleep(ctx context.Context) {
 // should be called which deffer after Run to ensure proper cleanup
 func (p *OutboxWorker) Clean() {
 	if err := p.box.CleanProcessingOutboxEvents(context.Background(), p.id); err != nil {
-		p.log.WithError(err).Error("failed to clean processing events for worker")
+		p.log.WithError(err).Error("failed to clean processing outbox events for worker")
+		return
 	}
 
 	p.log.Info("outbox worker stopped successfully")

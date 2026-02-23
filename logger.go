@@ -47,11 +47,13 @@ func (l *Logger) WithMessage(msg kafka.Message) *Logger {
 		EventIDField:       "unknown",
 		EventTypeField:     "unknown",
 		EventProducerField: "unknown",
+		EventVersionField:  "unknown",
 	}
 
 	hs, err := headers.ParseMessageRequiredHeaders(msg.Headers)
 	if err == nil {
 		fields[EventIDField] = hs.EventID.String()
+		fields[EventTypeField] = hs.EventType
 		fields[EventVersionField] = int(hs.EventVersion)
 		fields[EventProducerField] = hs.Producer
 	}
