@@ -252,7 +252,7 @@ func (w *InboxWorker) handleLoop(
 				break
 			}
 
-			w.log.WithInboxEvent(ev).WithError(herr).Warn("failed to mark inbox event as delayed ")
+			w.log.WithInboxEvent(ev).WithError(herr).Warn("mark inbox event as delayed ")
 		default:
 			ev, err := w.box.CommitInboxEvent(ctx, w.id, event.EventID)
 			if err != nil {
