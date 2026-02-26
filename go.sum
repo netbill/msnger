@@ -13,8 +13,8 @@ github.com/jackc/puddle/v2 v2.2.2 h1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo
 github.com/jackc/puddle/v2 v2.2.2/go.mod h1:vriiEXHvEE654aYKXXjOvZM39qJ0q+azkZFrfEOc3H4=
 github.com/klauspost/compress v1.15.9 h1:wKRjX6JRtDdrE9qwa4b/Cip7ACOshUI4smpCQanqjSY=
 github.com/klauspost/compress v1.15.9/go.mod h1:PhcZ0MbTNciWF3rruxRgKxI5NkcHHrHUDtV4Yw2GlzU=
-github.com/netbill/logium v0.3.0 h1:PfHi1Zq6SC0+t35oSgaZOD8eDT9AfatnlqPPA/1dlGc=
-github.com/netbill/logium v0.3.0/go.mod h1:slGhDjvW3FLNFO7eIY+VLtmQmMWWpQhowYFmHGZZEGw=
+github.com/netbill/logium v0.3.1 h1:PGueghv235ZvDhK1e2ila3u9PlKFIy0ZapZxBDbX3cc=
+github.com/netbill/logium v0.3.1/go.mod h1:slGhDjvW3FLNFO7eIY+VLtmQmMWWpQhowYFmHGZZEGw=
 github.com/netbill/pgdbx v0.3.1 h1:CvgRspPheR8V5V5j7eeplDj7fsn0EGEmdFI741a0wAU=
 github.com/netbill/pgdbx v0.3.1/go.mod h1:hQAdvFqACilxbuzInfVTsvjOSEu4uKUVCDZkOXqdWA0=
 github.com/pierrec/lz4/v4 v4.1.15 h1:MO0/ucJhngq7299dKLwIMtgTfbkoSPF6AoMYDd8Q4q0=

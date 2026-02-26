@@ -5,7 +5,7 @@ go 1.25.6
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/netbill/logium v0.3.0
+	github.com/netbill/logium v0.3.1
 	github.com/netbill/pgdbx v0.3.1
 	github.com/segmentio/kafka-go v0.4.50
 )
@@ -18,8 +18,4 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-)
-
-replace (
-	github.com/netbill/logium => /home/trpdjke/go/src/github.com/netbill/logium
 )
