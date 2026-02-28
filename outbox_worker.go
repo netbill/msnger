@@ -143,17 +143,17 @@ func getOutboxResult(ctx context.Context, results <-chan producerRes) (producerR
 
 // Run starts the outbox worker, which continuously processes batches of Outbox events
 // until the provided context is canceled.
-func (p *OutboxWorker) Run(ctx context.Context) {
-	p.log.Info("starting outbox worker")
+func (w *OutboxWorker) Run(ctx context.Context) {
+	w.log.Info("starting outbox worker")
 
-	jobs := make(chan producerJob, p.config.Slots)
-	results := make(chan producerRes, p.config.Slots)
+	jobs := make(chan producerJob, w.config.Slots)
+	results := make(chan producerRes, w.config.Slots)
 
 	var wg sync.WaitGroup
-	wg.Add(p.config.Routines)
+	wg.Add(w.config.Routines)
 
-	for i := 0; i < p.config.Routines; i++ {
-		go p.sendLoop(ctx, &wg, jobs, results)
+	for i := 0; i < w.config.Routines; i++ {
+		go w.sendLoop(ctx, &wg, jobs, results)
 	}
 
 	defer func() {
@@ -167,17 +167,17 @@ func (p *OutboxWorker) Run(ctx context.Context) {
 			return
 		}
 
-		processed := p.processBatch(ctx, p.config.BatchSize, jobs, results)
+		processed := w.processBatch(ctx, w.config.BatchSize, jobs, results)
 
 		if processed == 0 {
-			p.sleep(ctx)
+			w.sleep(ctx)
 		}
 	}
 }
 
 // sendLoop continuously receives producer jobs from the jobs channel,
 // sends the corresponding events to Kafka using the producer,
-func (p *OutboxWorker) sendLoop(
+func (w *OutboxWorker) sendLoop(
 	ctx context.Context,
 	wg *sync.WaitGroup,
 	jobs <-chan producerJob,
@@ -188,7 +188,7 @@ func (p *OutboxWorker) sendLoop(
 	for job := range jobs {
 		event := job.event
 
-		err := p.producer.WriteToKafka(ctx, Message{
+		err := w.producer.WriteToKafka(ctx, Message{
 			ID:       event.EventID,
 			Topic:    event.Topic,
 			Key:      event.Key,
@@ -198,7 +198,7 @@ func (p *OutboxWorker) sendLoop(
 			Payload:  event.Payload,
 		})
 		if err != nil {
-			p.log.WithOutboxEvent(event).WithError(err).Error("failed to send outbox event")
+			w.log.WithOutboxEvent(event).WithError(err).Error("failed to send outbox event")
 			_ = sendOutboxResult(ctx, results, producerRes{
 				event:       event,
 				err:         err,
@@ -208,7 +208,7 @@ func (p *OutboxWorker) sendLoop(
 			continue
 		}
 
-		p.log.WithOutboxEvent(event).Debug("outbox event sent successfully")
+		w.log.WithOutboxEvent(event).Debug("outbox event sent successfully")
 		_ = sendOutboxResult(ctx, results, producerRes{
 			event:       event,
 			err:         nil,
@@ -220,15 +220,15 @@ func (p *OutboxWorker) sendLoop(
 // processBatch reserves a batch of Outbox events, sends them to the producer jobs channel,
 // and processes the results to determine which events were sent successfully,
 // which should be delayed for future processing, and which should be marked as failed.
-func (p *OutboxWorker) processBatch(
+func (w *OutboxWorker) processBatch(
 	ctx context.Context,
 	batch int,
 	jobs chan<- producerJob,
 	results <-chan producerRes,
 ) int {
-	events, err := p.box.ReserveOutboxEvents(ctx, p.id, batch)
+	events, err := w.box.ReserveOutboxEvents(ctx, w.id, batch)
 	if err != nil {
-		p.log.WithError(err).Error("failed to reserve outbox events")
+		w.log.WithError(err).Error("failed to reserve outbox events")
 
 		return 0
 	}
@@ -253,24 +253,24 @@ func (p *OutboxWorker) processBatch(
 		}
 
 		if r.err != nil {
-			if p.config.MaxAttempts != 0 && r.event.Attempts+1 >= p.config.MaxAttempts {
+			if w.config.MaxAttempts != 0 && r.event.Attempts+1 >= w.config.MaxAttempts {
 				failed[r.event.EventID] = FailedOutboxEventData{
 					LastAttemptAt: r.processedAt,
 					Reason:        r.err.Error(),
 				}
 
-				p.log.WithOutboxEvent(r.event).
+				w.log.WithOutboxEvent(r.event).
 					Error("event marked as failed after reaching max attempts")
 				continue
 			}
 
 			pending[r.event.EventID] = DelayOutboxEventData{
 				LastAttemptAt: r.processedAt,
-				NextAttemptAt: p.nextAttemptAt(r.event.Attempts + 1),
+				NextAttemptAt: w.nextAttemptAt(r.event.Attempts + 1),
 				Reason:        r.err.Error(),
 			}
 
-			p.log.WithOutboxEvent(r.event).
+			w.log.WithOutboxEvent(r.event).
 				Warn("event will be delayed for future processing after failed attempt")
 			continue
 		}
@@ -279,27 +279,27 @@ func (p *OutboxWorker) processBatch(
 	}
 
 	if len(commit) > 0 {
-		if err = p.box.CommitOutboxEvents(ctx, p.id, commit); err != nil {
-			p.log.WithError(err).Error("failed to mark events as sent")
+		if err = w.box.CommitOutboxEvents(ctx, w.id, commit); err != nil {
+			w.log.WithError(err).Error("failed to mark events as sent")
 		}
 
-		p.log.WithField("count", len(commit)).Debug("events marked as sent")
+		w.log.WithField("count", len(commit)).Debug("events marked as sent")
 	}
 
 	if len(pending) > 0 {
-		if err = p.box.DelayOutboxEvents(ctx, p.id, pending); err != nil {
-			p.log.WithError(err).Error("failed to delay events")
+		if err = w.box.DelayOutboxEvents(ctx, w.id, pending); err != nil {
+			w.log.WithError(err).Error("failed to delay events")
 		}
 
-		p.log.WithField("count", len(pending)).Debug("events delayed for future processing")
+		w.log.WithField("count", len(pending)).Debug("events delayed for future processing")
 	}
 
 	if len(failed) > 0 {
-		if err = p.box.FailedOutboxEvents(ctx, p.id, failed); err != nil {
-			p.log.WithError(err).Error("failed to mark events as failed")
+		if err = w.box.FailedOutboxEvents(ctx, w.id, failed); err != nil {
+			w.log.WithError(err).Error("failed to mark events as failed")
 		}
 
-		p.log.WithField("count", len(failed)).Debug("events marked as failed after reaching max attempts")
+		w.log.WithField("count", len(failed)).Debug("events marked as failed after reaching max attempts")
 	}
 
 	return len(events)
@@ -307,21 +307,21 @@ func (p *OutboxWorker) processBatch(
 
 // nextAttemptAt calculates the next attempt time for a failed event based on the number of attempts
 // and the configured minimum and maximum next attempt durations.
-func (p *OutboxWorker) nextAttemptAt(attempts int32) time.Time {
-	res := time.Second * time.Duration(30*attempts)
-	if res < p.config.MinNextAttempt {
-		return time.Now().UTC().Add(p.config.MinNextAttempt)
+func (w *OutboxWorker) nextAttemptAt(attempts int32) time.Time {
+	res := w.config.MinNextAttempt * time.Duration(attempts)
+	if res < w.config.MinNextAttempt {
+		return time.Now().UTC().Add(w.config.MinNextAttempt)
 	}
-	if res > p.config.MaxNextAttempt {
-		return time.Now().UTC().Add(p.config.MaxNextAttempt)
+	if res > w.config.MaxNextAttempt {
+		return time.Now().UTC().Add(w.config.MaxNextAttempt)
 	}
 
 	return time.Now().UTC().Add(res)
 }
 
 // sleep pauses the worker for the configured sleep duration or until the context is canceled, whichever comes first.
-func (p *OutboxWorker) sleep(ctx context.Context) {
-	t := time.NewTimer(p.config.Sleep)
+func (w *OutboxWorker) sleep(ctx context.Context) {
+	t := time.NewTimer(w.config.Sleep)
 	defer t.Stop()
 
 	select {
@@ -334,11 +334,11 @@ func (p *OutboxWorker) sleep(ctx context.Context) {
 
 // Clean gracefully stops the outbox worker by cleaning up any events that are currently reserved for processing by this worker.
 // should be called which deffer after Run to ensure proper cleanup
-func (p *OutboxWorker) Clean() {
-	if err := p.box.CleanProcessingOutboxEvents(context.Background(), p.id); err != nil {
-		p.log.WithError(err).Error("failed to clean processing outbox events for worker")
+func (w *OutboxWorker) Clean() {
+	if err := w.box.CleanProcessingOutboxEvents(context.Background(), w.id); err != nil {
+		w.log.WithError(err).Error("failed to clean processing outbox events for worker")
 		return
 	}
 
-	p.log.Info("outbox worker stopped successfully")
+	w.log.Info("outbox worker stopped successfully")
 }

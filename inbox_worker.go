@@ -252,7 +252,7 @@ func (w *InboxWorker) handleLoop(
 				break
 			}
 
-			w.log.WithInboxEvent(ev).WithError(herr).Warn("mark inbox event as delayed ")
+			w.log.WithInboxEvent(ev).WithError(herr).Warn("mark inbox event as delayed")
 		default:
 			ev, err := w.box.CommitInboxEvent(ctx, w.id, event.EventID)
 			if err != nil {
@@ -281,7 +281,7 @@ func (w *InboxWorker) handleEvent(ctx context.Context, event InboxEvent) error {
 // nextAttemptAt calculates the next attempt time for processing a failed event based on the number of attempts
 // and the configured minimum and maximum next attempt durations.
 func (w *InboxWorker) nextAttemptAt(attempts int32) time.Time {
-	res := time.Second * time.Duration(30*attempts)
+	res := w.config.MinNextAttempt * time.Duration(attempts)
 	if res < w.config.MinNextAttempt {
 		return time.Now().UTC().Add(w.config.MinNextAttempt)
 	}
