@@ -208,6 +208,7 @@ func (p *Producer) WriteToKafka(ctx context.Context, msg Message) error {
 	}
 
 	m := kafka.Message{
+		Topic: msg.Topic,
 		Key:   []byte(msg.Key),
 		Value: msg.Payload,
 		Headers: []kafka.Header{

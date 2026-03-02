@@ -271,7 +271,7 @@ func (w *InboxWorker) handleLoop(
 func (w *InboxWorker) handleEvent(ctx context.Context, event InboxEvent) error {
 	handler, ok := w.route[event.Type]
 	if !ok {
-		w.log.WithInboxEvent(event).Warn("no handler for event type")
+		w.log.WithInboxEvent(event).Debug("no handler for event type")
 		return nil
 	}
 

@@ -46,8 +46,8 @@ func (l *Logger) WithMessage(msg kafka.Message) *Logger {
 		EventTopicField:    msg.Topic,
 		EventIDField:       "unknown",
 		EventTypeField:     "unknown",
-		EventProducerField: "unknown",
 		EventVersionField:  "unknown",
+		EventProducerField: "unknown",
 	}
 
 	hs, err := headers.ParseMessageRequiredHeaders(msg.Headers)
