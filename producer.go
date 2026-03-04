@@ -208,7 +208,6 @@ func (p *Producer) WriteToKafka(ctx context.Context, msg Message) error {
 	}
 
 	m := kafka.Message{
-		Topic: msg.Topic,
 		Key:   []byte(msg.Key),
 		Value: msg.Payload,
 		Headers: []kafka.Header{
@@ -225,6 +224,7 @@ func (p *Producer) WriteToKafka(ctx context.Context, msg Message) error {
 		return fmt.Errorf("write message to kafka: %w", err)
 	}
 
+	m.Topic = msg.Topic
 	p.log.WithMessage(m).Debug("writing message to Kafka")
 
 	return nil
