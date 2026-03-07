@@ -16,8 +16,8 @@ const (
 
 	DefaultInboxWorkerBatch = 100
 
-	DefaultInboxWorkerMinNextAttempt = time.Minute
-	DefaultInboxWorkerMaxNextAttempt = 10 * time.Minute
+	DefaultInboxWorkerMinNextAttempt = time.Second
+	DefaultInboxWorkerMaxNextAttempt = time.Minute
 )
 
 // InboxWorkerConfig defines configuration for InboxWorker.

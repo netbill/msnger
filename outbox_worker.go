@@ -16,8 +16,8 @@ const (
 
 	DefaultOutboxWorkerBatch = 100
 
-	DefaultOutboxWorkerMinNextAttempt = time.Minute
-	DefaultOutboxWorkerMaxNextAttempt = 10 * time.Minute
+	DefaultOutboxWorkerMinNextAttempt = time.Second
+	DefaultOutboxWorkerMaxNextAttempt = time.Minute
 )
 
 // OutboxWorkerConfig configures OutboxWorker behavior.
